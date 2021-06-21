@@ -39,7 +39,10 @@ loop:
 
 int main() {
 
-  afl_snapshot_init();
+  if (afl_snapshot_init() == -1) {
+    perror("Initialization failed");
+    exit(1);
+  }
   
   shm_addr = mmap(0, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC,
              MAP_SHARED | MAP_ANONYMOUS, 0, 0);

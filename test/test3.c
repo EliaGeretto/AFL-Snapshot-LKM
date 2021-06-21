@@ -178,7 +178,12 @@ int main() {
     if (pid == 0) {
         printf("In child!\n");
         print_maps();
-        afl_snapshot_init();
+
+        if (afl_snapshot_init() == -1) {
+            perror("Initialization failed");
+            exit(1);
+        }
+
         randomly_map(post_fork_pages, POST_FORK_BASE);
         randomly_incl_excl(pre_fork_pages);
         randomly_incl_excl(post_fork_pages);
