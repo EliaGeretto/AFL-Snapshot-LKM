@@ -56,3 +56,4 @@ dkms.conf
 # Auxiliary files
 compile_commands.json
 .cache
+.vagrant
