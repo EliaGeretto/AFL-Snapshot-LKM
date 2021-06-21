@@ -1,11 +1,17 @@
-override CFLAGS += -I ../include -g
+override CFLAGS += -I../include -fPIC
+override LDFLAGS += -shared
+
+TARGET_LIB = libaflsnapshot.so
+
+SRCS = libaflsnapshot.c
+OBJS = $(SRCS:.c=.o)
 
 .PHONY: all
+all: $(TARGET_LIB)
 
-all: libaflsnapshot.so
+$(TARGET_LIB): $(OBJS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-libaflsnapshot.so: libaflsnapshot.o
-	$(CC) -fPIC -shared libaflsnapshot.o -o libaflsnapshot.so $(LDFLAGS)
-
+.PHONY: clean
 clean:
-	rm -f libaflsnapshot.so
+	$(RM) $(OBJS) $(TARGET_LIB)
