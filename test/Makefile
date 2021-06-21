@@ -1,2 +1,23 @@
-test3: test3.c Makefile
-	gcc -I ../include -g ../lib/libaflsnapshot.o test3.c -o test3
+override CFLAGS = -I../include -g
+
+SRCS = test1.c test2.c test3.c
+BINS = $(SRCS:.c=)
+
+.PHONY: all
+all: $(BINS)
+
+$(BINS): ../lib/libaflsnapshot.o
+
+.PHONY: clean
+clean:
+	$(RM) $(BINS)
+
+.PHONY: test
+test: all
+	for test in test*; \
+	do \
+		if [ -x $${test} ]; \
+		then \
+			./$$test; \
+		fi; \
+	done

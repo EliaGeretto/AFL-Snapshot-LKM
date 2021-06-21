@@ -1,13 +1,4 @@
-
 .PHONY: all
-
-test: all
-	sudo rmmod afl_snapshot || echo "Not loaded anyways..."
-	sudo insmod src/afl_snapshot.ko
-	./test/test3
-
-
-
 all:
 	cd src && $(MAKE)
 	cd lib && $(MAKE)
@@ -16,7 +7,7 @@ all:
 clean:
 	cd src && $(MAKE) clean
 	cd lib && $(MAKE) clean
-	cd test && $(MAKE)
+	cd test && $(MAKE) clean
 
 code-format:
 	./.custom-format.py -i src/*.c
@@ -24,3 +15,8 @@ code-format:
 	./.custom-format.py -i lib/*.c
 	./.custom-format.py -i lib/*.h
 	./.custom-format.py -i include/*.h
+
+test: all
+	sudo rmmod afl_snapshot || echo "Not loaded anyways..."
+	sudo insmod src/afl_snapshot.ko
+	cd test && $(MAKE) test
