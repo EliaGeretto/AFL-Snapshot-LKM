@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 if [ '!' "$EUID" = 0 ] && [ '!' `id -u` = 0 ] ; then
 	echo "Warning: you need to be root to run this!"
