@@ -44,7 +44,9 @@ int take_snapshot(int config) {
 
     initialize_snapshot(data, config);
     take_memory_snapshot(data);
-    // take_files_snapshot(data);
+    if (take_files_snapshot(data)) {
+      pr_err("error while snapshotting files");
+    }
 
     return 1;
 
@@ -74,7 +76,9 @@ void restore_snapshot(struct task_data *data) {
 
   recover_threads_snapshot(data);
   recover_memory_snapshot(data);
-  // recover_files_snapshot(data);
+  if (recover_files_snapshot(data)) {
+    pr_err("error while snapshotting files");
+  }
   recover_state(data);
 
 }
@@ -107,10 +111,9 @@ void clean_snapshot(void) {
   if (!data) { return; }
 
   clean_memory_snapshot(data);
-  // clean_files_snapshot(data);
+  clean_files_snapshot(data);
   clear_snapshot(data);
 
   remove_task_data(data);
 
 }
-

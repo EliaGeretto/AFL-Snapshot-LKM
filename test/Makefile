@@ -1,6 +1,6 @@
 override CFLAGS = -I../include -g
 
-SRCS = test1.c test2.c test3.c
+SRCS = test1.c test2.c test3.c test4.c test5.c
 BINS = $(SRCS:.c=)
 
 .PHONY: all

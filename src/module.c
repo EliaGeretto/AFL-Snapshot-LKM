@@ -37,6 +37,10 @@ void (*k_flush_tlb_mm_range)(struct mm_struct *mm, unsigned long start,
 void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
                          unsigned long size);
 
+dup_fd_t dup_fd_ptr;
+
+put_files_struct_t put_files_struct_ptr;
+
 int            mod_major_num;
 struct class * mod_class;
 struct device *mod_device;
@@ -184,17 +188,23 @@ static struct ftrace_hook syscall_hooks[] = {
 #endif
 
 // TODO(galli-leo): we should be able to just use kallsyms_lookup_name now.
-int snapshot_initialize_k_funcs() {
+int snapshot_initialize_k_funcs()
+{
+	k_flush_tlb_mm_range =
+		(void *)kallsyms_lookup_name("flush_tlb_mm_range");
+	k_zap_page_range = (void *)kallsyms_lookup_name("zap_page_range");
+	dup_fd_ptr = (dup_fd_t)kallsyms_lookup_name("dup_fd");
+	put_files_struct_ptr =
+		(put_files_struct_t)kallsyms_lookup_name("put_files_struct");
 
-  k_flush_tlb_mm_range = (void *)kallsyms_lookup_name("flush_tlb_mm_range");
-  k_zap_page_range = (void *)kallsyms_lookup_name("zap_page_range");
+	if (!k_flush_tlb_mm_range || !k_zap_page_range || !dup_fd_ptr ||
+	    !put_files_struct_ptr) {
+		return -ENOENT;
+	}
 
-  if (!k_flush_tlb_mm_range || !k_zap_page_range) { return -ENOENT; }
+	SAYF("All loaded");
 
-  SAYF("All loaded");
-
-  return 0;
-
+	return 0;
 }
 
 void finish_fault_hook(unsigned long ip, unsigned long parent_ip,

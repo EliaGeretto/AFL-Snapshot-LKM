@@ -176,6 +176,11 @@ static inline void set_snapshot_page_cow(struct snapshot_page *sp) {
 
 }
 
+struct open_files_snapshot {
+	struct files_struct *files;
+	loff_t *offsets;
+};
+
 #define SNAPSHOT_HASHTABLE_SZ 0x8
 
 struct snapshot {
@@ -186,6 +191,8 @@ struct snapshot {
   struct snapshot_vma *ss_mmap;
 
   struct pt_regs regs;
+
+  struct open_files_snapshot ss_files;
 
   DECLARE_HASHTABLE(ss_page, SNAPSHOT_HASHTABLE_SZ);
 
@@ -205,12 +212,28 @@ extern void (*k_flush_tlb_mm_range)(struct mm_struct *mm, unsigned long start,
 extern void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
                                 unsigned long size);
 
+/* The signature of dup_fd was changed in 5.9.0 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+typedef struct files_struct *(*dup_fd_t)(struct files_struct *oldf,
+					 unsigned int max_fds, int *errorp);
+#define dup_fd(oldf, max_fds, errorp) dup_fd_ptr(oldf, max_fds, errorp)
+#else
+typedef struct files_struct *(*dup_fd_t)(struct files_struct *oldf,
+					 int *errorp);
+#define dup_fd(oldf, max_fds, errorp) dup_fd_ptr(oldf, errorp)
+#endif
+extern dup_fd_t dup_fd_ptr;
+
+typedef void (*put_files_struct_t)(struct files_struct *fs);
+extern put_files_struct_t put_files_struct_ptr;
+#define put_files_struct put_files_struct_ptr
+
 void take_memory_snapshot(struct task_data *data);
 void recover_memory_snapshot(struct task_data *data);
 void clean_memory_snapshot(struct task_data *data);
 
-void take_files_snapshot(struct task_data *data);
-void recover_files_snapshot(struct task_data *data);
+int take_files_snapshot(struct task_data *data);
+int recover_files_snapshot(struct task_data *data);
 void clean_files_snapshot(struct task_data *data);
 
 void recover_threads_snapshot(struct task_data *data);

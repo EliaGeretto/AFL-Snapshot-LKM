@@ -1,91 +1,164 @@
 #include "hook.h"
 #include "debug.h"
+#include "linux/fdtable.h"
+#include "linux/fs.h"
+#include "linux/gfp.h"
+#include "linux/kallsyms.h"
+#include "linux/mm.h"
+#include "linux/printk.h"
+#include "linux/sched.h"
 #include "task_data.h"
 #include "snapshot.h"
 
-void take_files_snapshot(struct task_data *data) {
-
-  struct files_struct *files = current->files;
-  struct fdtable *     fdt = rcu_dereference_raw(files->fdt);
-  int                  size, i;
-
-  size = (fdt->max_fds - 1) / BITS_PER_LONG + 1;
-
-  if (data->snapshot_open_fds == NULL)
-    data->snapshot_open_fds =
-        (unsigned long *)kmalloc(size * sizeof(unsigned long), GFP_ATOMIC);
-
-  for (i = 0; i < size; i++)
-    data->snapshot_open_fds[i] = fdt->open_fds[i];
-
+static int save_file_offset(const void *p, struct file *file, unsigned int fd)
+{
+	loff_t *offsets = (loff_t *)p;
+	offsets[fd] = vfs_llseek(file, 0, SEEK_CUR);
+	pr_debug("recording fd: %u, offset: %lld\n", fd, offsets[fd]);
+	return 0;
 }
 
-void recover_files_snapshot(struct task_data *data) {
+static int restore_file_offset(const void *p, struct file *file,
+			       unsigned int fd)
+{
+	loff_t *offsets = (loff_t *)p;
 
-  /*
-   * assume the child process will not close any
-   * father's fd?
-   */
+	/* Restore offset only when valid */
+	if (offsets[fd] >= 0) {
+		loff_t res = vfs_llseek(file, offsets[fd], SEEK_SET);
+		pr_debug("restoring fd: %u, offset: %lld, res: %lld\n", fd,
+			 offsets[fd], res);
 
-  struct files_struct *files = current->files;
+		if (res < 0) {
+			pr_err("error while seeking back fd %u: %lld", fd, res);
+			return res;
+		} else if (res != offsets[fd]) {
+			pr_err("could not seek fd %u back to old position (%lld), "
+			       "current position (%lld)",
+			       fd, offsets[fd], res);
+			return 1;
+		}
+	}
 
-  if (!data) {
-
-    WARNF("Unable to find files_struct data in recover_files_snapshot");
-    return;
-
-  }
-
-  struct fdtable *fdt = rcu_dereference_raw(files->fdt);
-
-  int i, j = 0;
-  for (;;) {
-
-    unsigned long cur_set, old_set;
-    i = j * BITS_PER_LONG;
-    if (i >= fdt->max_fds) break;
-    cur_set = fdt->open_fds[j];
-    old_set = data->snapshot_open_fds[j++];
-    DBG_PRINT("cur_set: 0x%08lx old_set: 0x%08lx\n", cur_set, old_set);
-    while (cur_set) {
-
-      if (cur_set & 1) {
-
-        if (!(old_set & 1) && fdt->fd[i] != NULL) {
-
-          struct file *file = fdt->fd[i];
-          DBG_PRINT("find new fds %d file* 0x%08lx\n", i, (unsigned long)file);
-          // fdt->fd[i] = NULL;
-          // filp_close(file, files);
-          WARNF("closing doesn't work :(\n");
-          // __close_fd(files, i);
-
-        }
-
-      }
-
-      i++;
-      cur_set >>= 1;
-      old_set >>= 1;
-
-    }
-
-  }
-
+	return 0;
 }
 
-void clean_files_snapshot(struct task_data *data) {
+int take_files_snapshot(struct task_data *data)
+{
+	struct open_files_snapshot *files_snap = &data->ss.ss_files;
 
-  struct files_struct *files = current->files;
+	struct files_struct *current_files = current->files;
+	struct files_struct *files_copy = NULL;
 
-  if (!data) {
+	unsigned int max_fds = 0;
+	loff_t *offsets = NULL;
 
-    WARNF("Unable to find files_struct data in clean_files_snapshot");
-    return;
+	int error = 0;
 
-  }
+	if (!(data->config & AFL_SNAPSHOT_FDS)) {
+		files_snap->files = NULL;
+		files_snap->offsets = NULL;
+		return 0;
+	}
 
-  if (data->snapshot_open_fds != NULL) kfree(data->snapshot_open_fds);
+	pr_debug("duplicating files structure for current thread\n");
+	files_copy = dup_fd(current_files, NR_OPEN_MAX, &error);
+	if (!files_copy)
+		goto out;
 
+	/* Locking is not necessary because files_snapshot was just created, this
+	 * is the only reference */
+	max_fds = rcu_dereference_raw(files_copy->fdt)->max_fds;
+
+	pr_debug("allocating memory for %u offsets\n", max_fds);
+	offsets = kvmalloc_array(max_fds, sizeof(loff_t), GFP_KERNEL_ACCOUNT);
+	if (!offsets) {
+		error = -ENOMEM;
+		goto out_release;
+	}
+
+	pr_debug("saving offsets for all fds\n");
+	memset(offsets, -1, max_fds * sizeof(loff_t));
+	if ((error = iterate_fd(files_copy, 0, save_file_offset, offsets)))
+		goto out_release;
+
+	files_snap->files = files_copy;
+	files_snap->offsets = offsets;
+
+	return 0;
+
+out_release:
+	put_files_struct(files_copy);
+	kvfree(offsets);
+
+out:
+	return error;
 }
 
+int recover_files_snapshot(struct task_data *data)
+{
+	struct open_files_snapshot *files_snap = &data->ss.ss_files;
+	struct task_struct *current_task = current;
+
+	struct files_struct *restored_files = NULL;
+	struct files_struct *old_files = NULL;
+	int error = 0;
+
+	if (!(data->config & AFL_SNAPSHOT_FDS)) {
+		return 0;
+	}
+
+	if (!files_snap->files || !files_snap->offsets) {
+		error = -EINVAL;
+		goto out;
+	}
+
+	pr_debug("duplicating snapshotted files structure\n");
+	restored_files = dup_fd(files_snap->files, NR_OPEN_MAX, &error);
+	if (!restored_files) {
+		goto out;
+	}
+
+	pr_debug("seeking all files back to the original position\n");
+	if ((error = iterate_fd(restored_files, 0, restore_file_offset,
+				files_snap->offsets))) {
+		goto out_release;
+	}
+
+	pr_debug("replacing files structure for current task\n");
+	old_files = current_task->files;
+
+	if (atomic_read(&old_files->count) > 1) {
+		pr_warn("files structure being replaced is shared with other tasks");
+	}
+
+	task_lock(current_task);
+	current_task->files = restored_files;
+	task_unlock(current_task);
+	put_files_struct(old_files);
+
+	return 0;
+
+out_release:
+	put_files_struct(restored_files);
+
+out:
+	return error;
+}
+
+void clean_files_snapshot(struct task_data *data)
+{
+	struct open_files_snapshot *files_snap = &data->ss.ss_files;
+
+	if (files_snap->files) {
+		pr_debug("dropping files structure snapshot\n");
+		put_files_struct(files_snap->files);
+		files_snap->files = NULL;
+	}
+
+	if (files_snap->offsets) {
+		pr_debug("freeing offsets array\n");
+		kvfree(files_snap->offsets);
+		files_snap->offsets = NULL;
+	}
+}

@@ -20,7 +20,6 @@ struct task_data {
   const struct task_struct *tsk;
 
   struct snapshot ss;
-  unsigned long * snapshot_open_fds;
 
   struct vmrange_node *allowlist, *blocklist;
   int                  config;
