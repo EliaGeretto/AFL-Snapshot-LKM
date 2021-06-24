@@ -1,4 +1,5 @@
-.PHONY: all
+.PHONY: all clean code-format test install
+
 all:
 	cd src && $(MAKE)
 	cd lib && $(MAKE)
@@ -20,3 +21,7 @@ test: all
 	sudo rmmod afl_snapshot || echo "Not loaded anyways..."
 	sudo insmod src/afl_snapshot.ko
 	cd test && $(MAKE) test
+
+install: all
+	cd src && $(MAKE) modules_install
+	cd lib && $(MAKE) install

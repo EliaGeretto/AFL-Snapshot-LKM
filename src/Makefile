@@ -1,55 +1,29 @@
-ifndef M
-override M = $(PWD)
-endif
-
-ifeq "$(shell uname -m)" "x86_64"
-  ARCH := x64
-else
-  # not sure about this one
-  ARCH := ia32
-endif
-
-MAP = /boot/System.map-$(shell uname -r)
-SYMS = /proc/kallsyms
-
-ifndef LINUX_SYSTEM_MAP
-  ifdef KALLSYMS
-    override LINUX_SYSTEM_MAP = /proc/kallsyms
-  else
-    ifeq "$(shell test -r $(MAP) && echo 1)" "1"
-      override LINUX_SYSTEM_MAP = $(MAP)
-    else
-      ifeq "$(shell test -r $(SYMS) && echo 1)" "1"
-        override LINUX_SYSTEM_MAP = $(SYMS)
-      else
-        $(error no readable $(MAP) and no readable $(SYMS) found)
-      endif
-    endif
-  endif
-endif
+ifneq ($(KERNELRELEASE),)
 
 obj-m += afl_snapshot.o
 afl_snapshot-objs := memory.o files.o threads.o task_data.o snapshot.o hook.o module.o
 
-ccflags-y := \
-  -ggdb3 \
-  -std=gnu99 \
-  -Wframe-larger-than=1000000000 \
-  -I$(M)/../include \
-  -Wno-declaration-after-statement \
-  $(CCFLAGS)
-
-ifdef DEBUG
-  ccflags-y += -DDEBUG
+ccflags-y := -I $(src)/../include
+ifneq ($(DEBUG),)
+  ccflags-y += -g -DDEBUG
 endif
 
-LINUX_DIR ?= /lib/modules/$(shell uname -r)/build
+else
 
-.PHONY: all
-# 	env ARCH='$(ARCH)' LINUX_SYSTEM_MAP='$(LINUX_SYSTEM_MAP)' python3 lookup_symbols.py
+KDIR ?= /lib/modules/$(shell uname -r)/build
 
-all:
-	$(MAKE) -C '$(LINUX_DIR)' M='$(M)' modules
+.PHONY: modules modules_install clean help
+
+modules:
+	$(MAKE) -C $(KDIR) M=$$PWD DEBUG=$(DEBUG) modules
+
+modules_install:
+	$(MAKE) -C $(KDIR) M=$$PWD modules_install
 
 clean:
-	$(MAKE) -C '$(LINUX_DIR)' M='$(M)' clean
+	$(MAKE) -C $(KDIR) M=$$PWD clean
+
+help:
+	$(MAKE) -C $(KDIR) M=$$PWD help
+
+endif
