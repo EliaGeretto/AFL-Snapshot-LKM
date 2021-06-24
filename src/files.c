@@ -7,6 +7,7 @@
 #include "linux/mm.h"
 #include "linux/printk.h"
 #include "linux/sched.h"
+#include "linux/sched/signal.h"
 #include "task_data.h"
 #include "snapshot.h"
 
@@ -99,8 +100,10 @@ int recover_files_snapshot(struct task_data *data)
 {
 	struct open_files_snapshot *files_snap = &data->ss.ss_files;
 	struct task_struct *current_task = current;
+	struct task_struct *task_iter = NULL;
 
 	struct files_struct *restored_files = NULL;
+	struct files_struct *current_old_files = NULL;
 	struct files_struct *old_files = NULL;
 	int error = 0;
 
@@ -125,17 +128,26 @@ int recover_files_snapshot(struct task_data *data)
 		goto out_release;
 	}
 
-	pr_debug("replacing files structure for current task\n");
-	old_files = current_task->files;
+	current_old_files = current_task->files;
 
-	if (atomic_read(&old_files->count) > 1) {
-		pr_warn("files structure being replaced is shared with other tasks");
+	for_each_thread (current_task, task_iter) {
+		if (task_iter->files != current_old_files) {
+			continue;
+		}
+
+		pr_debug("replacing files structure for thread "
+			 "in current process\n");
+
+		if (task_iter != current_task) {
+			atomic_inc(&restored_files->count);
+		}
+
+		old_files = task_iter->files;
+		task_lock(task_iter);
+		task_iter->files = restored_files;
+		task_unlock(task_iter);
+		put_files_struct(old_files);
 	}
-
-	task_lock(current_task);
-	current_task->files = restored_files;
-	task_unlock(current_task);
-	put_files_struct(old_files);
 
 	return 0;
 

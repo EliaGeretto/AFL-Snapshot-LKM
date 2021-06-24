@@ -1,6 +1,7 @@
 override CFLAGS = -I../include -g
+override LDLIBS = -lpthread
 
-SRCS = test1.c test2.c test3.c test4.c test5.c
+SRCS = test1.c test2.c test3.c test4.c test5.c test6.c
 BINS = $(SRCS:.c=)
 
 .PHONY: all
