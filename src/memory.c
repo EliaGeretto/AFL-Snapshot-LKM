@@ -548,7 +548,7 @@ void recover_memory_snapshot(struct task_data *data) {
     // }
   }
 
-  DBG_PRINT("HAD %d dirty pages!", count);
+  DBG_PRINT("HAD %d dirty pages!\n", count);
 
   // haha this is really dumb
   // surely this will not come back to bite me later, right??
@@ -560,7 +560,7 @@ void clean_snapshot_vmas(struct task_data *data) {
   struct snapshot_vma *p = data->ss.ss_mmap;
   struct snapshot_vma *q;
 
-  DBG_PRINT("freeing snapshot vmas");
+  DBG_PRINT("freeing snapshot vmas\n");
 
   while (p != NULL) {
 
@@ -673,13 +673,13 @@ int wp_page_hook(unsigned long ip, unsigned long parent_ip,
 
   ss_page->dirty = true;
   if (ss_page->in_dirty_list) {
-    WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
+    WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
   } else {
     ss_page->in_dirty_list = true;
     list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
   }
 
-  DBG_PRINT("wp_page_hook 0x%08lx", vmf->address);
+  DBG_PRINT("wp_page_hook 0x%08lx\n", vmf->address);
   // dump_stack();
   /* the page has been copied?
    * the page becomes COW page again. we do not need to take care of it.
@@ -708,7 +708,7 @@ int wp_page_hook(unsigned long ip, unsigned long parent_ip,
   if (is_snapshot_page_private(ss_page)) {
 
     DBG_PRINT(
-        "page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx",
+        "page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n",
         current->comm, vmf->address, (unsigned long)vmf->pte,
         vmf->orig_pte.pte);
 
@@ -788,14 +788,14 @@ int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
 
   }
 
-  DBG_PRINT("do_anonymous_page 0x%08lx", address);
+  DBG_PRINT("do_anonymous_page 0x%08lx\n", address);
   // dump_stack();
 
   // HAVE PTE NOW
   ss_page->has_had_pte = true;
   if (is_snapshot_page_none_pte(ss_page)) {
     if (ss_page->in_dirty_list) {
-      WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
+      WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
     } else {
       ss_page->in_dirty_list = true;
       list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);

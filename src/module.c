@@ -243,7 +243,7 @@ err_registration:
 
 static void __exit mod_exit(void)
 {
-	SAYF("Unloading AFL++ snapshot LKM");
+	SAYF("Unloading AFL++ snapshot LKM\n");
 	unhook_all();
 	fh_remove_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
 	misc_deregister(&misc_dev);
