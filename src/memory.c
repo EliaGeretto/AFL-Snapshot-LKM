@@ -689,7 +689,7 @@ int wp_page_hook(unsigned long ip, unsigned long parent_ip,
     /* reserved old page data */
     if (ss_page->page_data == NULL) {
 
-      ss_page->page_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
+      ss_page->page_data = kmalloc(PAGE_SIZE, GFP_ATOMIC);
 
     }
 
