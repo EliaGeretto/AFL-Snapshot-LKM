@@ -806,69 +806,69 @@ int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
 
 }
 
-void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs)
-{
-  struct pt_regs* pregs = ftrace_get_regs(regs);
-  struct vm_fault *vmf = (struct vm_fault*)pregs->di;
-  struct vm_area_struct *vma;
-  struct mm_struct *     mm;
-  struct task_data *     data;
-  struct snapshot_page * ss_page;
-  unsigned long          address;
+// void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
+//                    struct ftrace_ops *op, ftrace_regs_ptr regs)
+// {
+//   struct pt_regs* pregs = ftrace_get_regs(regs);
+//   struct vm_fault *vmf = (struct vm_fault*)pregs->di;
+//   struct vm_area_struct *vma;
+//   struct mm_struct *     mm;
+//   struct task_data *     data;
+//   struct snapshot_page * ss_page;
+//   unsigned long          address;
 
-  vma = vmf->vma;
-  address = vmf->address;
+//   vma = vmf->vma;
+//   address = vmf->address;
 
-  struct task_struct* ltask = get_cpu_var(last_task);
-  if (ltask == mm->owner) {
+//   struct task_struct* ltask = get_cpu_var(last_task);
+//   if (ltask == mm->owner) { // XXX: mm is not initialized!
 
-    // fast path
-    data = get_cpu_var(last_data);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
-  } else {
+//     // fast path
+//     data = get_cpu_var(last_data);
+//     put_cpu_var(last_task);
+//     put_cpu_var(last_data);
+//   } else {
 
-    // query the radix tree
-    data = get_task_data(mm->owner);
-    get_cpu_var(last_task) = mm->owner;
-    get_cpu_var(last_data) = data;
-    put_cpu_var(last_task);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
+//     // query the radix tree
+//     data = get_task_data(mm->owner);
+//     get_cpu_var(last_task) = mm->owner;
+//     get_cpu_var(last_data) = data;
+//     put_cpu_var(last_task);
+//     put_cpu_var(last_task);
+//     put_cpu_var(last_data);
 
-  }
+//   }
 
-  if (data && have_snapshot(data)) {
+//   if (data && have_snapshot(data)) {
 
-    ss_page = get_snapshot_page(data, address & PAGE_MASK);
+//     ss_page = get_snapshot_page(data, address & PAGE_MASK);
 
-  } else {
+//   } else {
 
-    return;
+//     return;
 
-  }
+//   }
 
-  if (!ss_page) {
+//   if (!ss_page) {
 
-    /* not a snapshot'ed page */
-    return;
+//     /* not a snapshot'ed page */
+//     return;
 
-  }
+//   }
 
-  DBG_PRINT("finish_fault 0x%08lx", address);
-  dump_stack();
+//   DBG_PRINT("finish_fault 0x%08lx", address);
+//   dump_stack();
 
-  // HAVE PTE NOW
-  ss_page->has_had_pte = true;
-  if (is_snapshot_page_none_pte(ss_page)) {
-    if (ss_page->in_dirty_list) {
-      WARNF("0x%016lx: Adding page to dirty list, but it's already there???", ss_page->page_base);
-    } else {
-      ss_page->in_dirty_list = true;
-      list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
-    }
-  }
+//   // HAVE PTE NOW
+//   ss_page->has_had_pte = true;
+//   if (is_snapshot_page_none_pte(ss_page)) {
+//     if (ss_page->in_dirty_list) {
+//       WARNF("0x%016lx: Adding page to dirty list, but it's already there???", ss_page->page_base);
+//     } else {
+//       ss_page->in_dirty_list = true;
+//       list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
+//     }
+//   }
 
-  return;
-}
+//   return;
+// }
