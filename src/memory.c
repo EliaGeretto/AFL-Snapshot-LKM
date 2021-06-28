@@ -313,7 +313,7 @@ void take_memory_snapshot(struct task_data *data) {
 
   // Only do loops if DBG_PRINT actually does something.
   // Not sure if compiler would be smart enough to eliminate these anyways.
-  #if DEBUG
+  #ifdef DEBUG
   struct vmrange_node *n = data->allowlist;
   while (n) {
 
