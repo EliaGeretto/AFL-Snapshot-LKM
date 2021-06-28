@@ -308,7 +308,6 @@ static void __exit mod_exit(void) {
   kobject_put(mod_kobj);
 
   device_destroy(mod_class, MKDEV(mod_major_num, 0));
-  class_unregister(mod_class);
   class_destroy(mod_class);
   unregister_chrdev(mod_major_num, DEVICE_NAME);
 
