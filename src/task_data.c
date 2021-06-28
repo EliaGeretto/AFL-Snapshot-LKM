@@ -2,8 +2,8 @@
 #include <linux/slab.h>
 #include "debug.h"
 
-LIST_HEAD(task_datas);
-static spinlock_t task_datas_lock;
+static LIST_HEAD(task_data_list);
+static DEFINE_SPINLOCK(task_data_lock);
 
 static void task_data_free_callback(struct rcu_head *rcu) {
 
@@ -30,7 +30,7 @@ struct task_data *get_task_data(const struct task_struct *tsk) {
   struct task_data *data = NULL;
 
   rcu_read_lock();
-  list_for_each_entry_rcu(data, &task_datas, list) {
+  list_for_each_entry_rcu(data, &task_data_list, list) {
 
     if (data->tsk == tsk) {
 
@@ -60,9 +60,9 @@ struct task_data *ensure_task_data(const struct task_struct *tsk) {
   data->tsk = tsk;
   INIT_LIST_HEAD(&data->ss.dirty_pages);
 
-  spin_lock(&task_datas_lock);
-  list_add_rcu(&data->list, &task_datas);
-  spin_unlock(&task_datas_lock);
+  spin_lock(&task_data_lock);
+  list_add_rcu(&data->list, &task_data_list);
+  spin_unlock(&task_data_lock);
 
   return data;
 
@@ -70,9 +70,9 @@ struct task_data *ensure_task_data(const struct task_struct *tsk) {
 
 void remove_task_data(struct task_data *data) {
 
-  spin_lock(&task_datas_lock);
+  spin_lock(&task_data_lock);
   list_del_rcu(&data->list);
-  spin_unlock(&task_datas_lock);
+  spin_unlock(&task_data_lock);
 
   call_rcu(&data->rcu, task_data_free_callback);
 
