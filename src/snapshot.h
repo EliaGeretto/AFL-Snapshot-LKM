@@ -238,8 +238,6 @@ void clean_files_snapshot(struct task_data *data);
 
 void recover_threads_snapshot(struct task_data *data);
 
-int snapshot_initialize_k_funcs(void);
-
 int wp_page_hook(unsigned long ip, unsigned long parent_ip,
                    struct ftrace_ops *op, ftrace_regs_ptr regs);
 int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,

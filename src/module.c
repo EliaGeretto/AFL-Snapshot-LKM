@@ -12,6 +12,7 @@
 #include <linux/uaccess.h>
 #include <linux/kallsyms.h>
 #include <linux/version.h>
+#include <linux/miscdevice.h>
 
 #include "task_data.h"  // mm associated data
 #include "hook.h"       // function hooking
@@ -23,7 +24,6 @@
 #include "afl_snapshot.h"
 
 #define DEVICE_NAME "afl_snapshot"
-#define CLASS_NAME "afl_snapshot"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("kallsyms & andreafioraldi");
@@ -31,28 +31,12 @@ MODULE_DESCRIPTION("Fast process snapshots for fuzzing");
 MODULE_VERSION("1.0.0");
 
 void (*k_flush_tlb_mm_range)(struct mm_struct *mm, unsigned long start,
-                             unsigned long end, unsigned int stride_shift,
-                             bool freed_tables);
-
+			     unsigned long end, unsigned int stride_shift,
+			     bool freed_tables);
 void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
-                         unsigned long size);
-
+			 unsigned long size);
 dup_fd_t dup_fd_ptr;
-
 put_files_struct_t put_files_struct_ptr;
-
-int            mod_major_num;
-struct class * mod_class;
-struct device *mod_device;
-
-struct kobject *mod_kobj;
-
-static char *mod_devnode(struct device *dev, umode_t *mode) {
-
-  if (mode) *mode = 0644;
-  return NULL;
-
-}
 
 long mod_dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 
@@ -127,11 +111,16 @@ long mod_dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 
 }
 
-static struct file_operations dev_fops = {
+static const struct file_operations dev_fops = {
+	.owner = THIS_MODULE,
+	.unlocked_ioctl = mod_dev_ioctl,
+};
 
-    .owner = THIS_MODULE,
-    .unlocked_ioctl = mod_dev_ioctl,
-
+static struct miscdevice misc_dev = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = DEVICE_NAME,
+	.fops = &dev_fops,
+	.mode = 0644,
 };
 
 #ifdef CONFIG_ARCH_HAS_SYSCALL_WRAPPER
@@ -180,15 +169,10 @@ asmlinkage long sys_exit_group(int error_code) {
 #endif
 
 static struct ftrace_hook syscall_hooks[] = {
-    SYSCALL_HOOK("sys_exit_group", sys_exit_group, &orig_sct_exit_group),
+	SYSCALL_HOOK("sys_exit_group", sys_exit_group, &orig_sct_exit_group),
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0) /* rename since Linux 5.8 */
-#define probe_kernel_read copy_from_kernel_nofault
-#endif
-
-// TODO(galli-leo): we should be able to just use kallsyms_lookup_name now.
-int snapshot_initialize_k_funcs()
+static int resolve_non_exported_symbols(void)
 {
 	k_flush_tlb_mm_range =
 		(void *)kallsyms_lookup_name("flush_tlb_mm_range");
@@ -202,120 +186,78 @@ int snapshot_initialize_k_funcs()
 		return -ENOENT;
 	}
 
-	SAYF("All loaded");
+	SAYF("Resolved all non-exported symbols");
 
 	return 0;
 }
 
-void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs);
+// void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
+//		       struct ftrace_ops *op, ftrace_regs_ptr regs);
 
-static int __init mod_init(void) {
+static int __init mod_init(void)
+{
+	int res;
 
-  SAYF("Loading AFL++ snapshot LKM");
+	SAYF("Loading AFL++ snapshot LKM");
 
-  mod_kobj = kobject_create_and_add("afl_snapshot", kernel_kobj);
-  if (!mod_kobj) return -ENOMEM;
+	res = misc_register(&misc_dev);
+	if (res) {
+		FATAL("Failed to register misc device");
+		return res;
+	}
 
-  mod_major_num = register_chrdev(0, DEVICE_NAME, &dev_fops);
-  if (mod_major_num < 0) {
+	res = fh_install_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
+	if (res) {
+		FATAL("Unable to hook syscalls");
+		goto err_registration;
+	}
 
-    FATAL("Failed to register a major number");
-    return mod_major_num;
+	if (!try_hook("do_wp_page", &wp_page_hook)) {
+		FATAL("Unable to hook do_wp_page");
+		res = -ENOENT;
+		goto err_hooks;
+	}
 
-  }
+	if (!try_hook("page_add_new_anon_rmap", &do_anonymous_hook)) {
+		FATAL("Unable to hook page_add_new_anon_rmap");
+		res = -ENOENT;
+		goto err_hooks;
+	}
 
-  mod_class = class_create(THIS_MODULE, CLASS_NAME);
-  if (IS_ERR(mod_class)) {
+	if (!try_hook("do_exit", &exit_hook)) {
+		FATAL("Unable to hook do_exit");
+		res = -ENOENT;
+		goto err_hooks;
+	}
 
-    FATAL("Failed to register device class");
+	// if (!try_hook("finish_fault", &finish_fault_hook)) {
+	//   FATAL("Unable to hook handle_pte_fault");
+	//   res = -ENOENT;
+	//   goto err_hooks;
+	// }
 
-    unregister_chrdev(mod_major_num, DEVICE_NAME);
-    return PTR_ERR(mod_class);
+	res = resolve_non_exported_symbols();
+	if (res)
+		goto err_hooks;
 
-  }
+	return 0;
 
-  mod_class->devnode = mod_devnode;
+err_hooks:
+	unhook_all();
 
-  mod_device = device_create(mod_class, NULL, MKDEV(mod_major_num, 0), NULL,
-                             DEVICE_NAME);
-  if (IS_ERR(mod_device)) {
+err_registration:
+	misc_deregister(&misc_dev);
 
-    FATAL("Failed to create the device\n");
-
-    class_destroy(mod_class);
-    unregister_chrdev(mod_major_num, DEVICE_NAME);
-    return PTR_ERR(mod_device);
-
-  }
-
-  SAYF("The major device number is %d", mod_major_num);
-
-  int err;
-  err = fh_install_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
-  if(err)
-      return err;
-
-  // func hooks
-  if (!try_hook("do_wp_page", &wp_page_hook)) {
-
-    FATAL("Unable to hook do_wp_page");
-    // unpatch_syscall_table();
-
-    return -ENOENT;
-
-  }
-
-  if (!try_hook("page_add_new_anon_rmap", &do_anonymous_hook)) {
-
-    FATAL("Unable to hook page_add_new_anon_rmap");
-
-    unhook_all();
-    // unpatch_syscall_table();
-    return -ENOENT;
-
-  }
-
-  // return 0;
-
-  if (!try_hook("do_exit", &exit_hook)) {
-
-    FATAL("Unable to hook do_exit");
-
-    unhook_all();
-    // unpatch_syscall_table();
-    return -ENOENT;
-
-  }
-
-  // if (!try_hook("finish_fault", &finish_fault_hook)) {
-  //       FATAL("Unable to hook handle_pte_fault");
-
-  //   unhook_all();
-  //   // unpatch_syscall_table();
-  //   return -ENOENT;
-  // }
-
-  // initialize snapshot non-exported funcs
-  return snapshot_initialize_k_funcs();
-
+	return res;
 }
 
-static void __exit mod_exit(void) {
-
-  SAYF("Unloading AFL++ snapshot LKM");
-
-  kobject_put(mod_kobj);
-
-  device_destroy(mod_class, MKDEV(mod_major_num, 0));
-  class_destroy(mod_class);
-  unregister_chrdev(mod_major_num, DEVICE_NAME);
-
-  unhook_all();
-  fh_remove_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
-
+static void __exit mod_exit(void)
+{
+	SAYF("Unloading AFL++ snapshot LKM");
+	unhook_all();
+	fh_remove_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
+	misc_deregister(&misc_dev);
 }
 
 module_init(mod_init);
 module_exit(mod_exit);
-
