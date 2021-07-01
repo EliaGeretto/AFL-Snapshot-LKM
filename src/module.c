@@ -127,7 +127,7 @@ static struct miscdevice misc_dev = {
 typedef int (*syscall_handler_t)(struct pt_regs *);
 
 // The original syscall handler that we removed to override exit_group()
-syscall_handler_t orig_sct_exit_group = NULL;
+syscall_handler_t orig_sct_exit_group;
 
 // TODO: non-x86 architectures syscall_table entries don't take pt_regs,
 // they take normal args
@@ -136,35 +136,25 @@ syscall_handler_t orig_sct_exit_group = NULL;
 // values to the actual __do_sys*
 // https://grok.osiris.cyber.nyu.edu/xref/linux/arch/x86/include/asm/syscall_wrapper.h?r=6e484764#161
 
-asmlinkage int sys_exit_group(struct pt_regs *regs) {
+asmlinkage int sys_exit_group(struct pt_regs *regs)
+{
+	if (exit_snapshot())
+		return orig_sct_exit_group(regs);
 
-  // SAYF("hooked sys_exit_group(%p)\n", regs);
-  // enum show_regs_mode print_kernel_regs;
-
-	// show_regs_print_info(LOGLEVEL_INFO);
-
-	// print_kernel_regs = user_mode(regs) ? SHOW_REGS_USER : SHOW_REGS_ALL;
-	// __show_regs(regs, print_kernel_regs, LOGLEVEL_INFO);
-  // int ret = exit_snapshot();
-  // SAYF("exit_snapshot() = %d\n", ret);
-  // return orig_sct_exit_group(regs);
-  if (exit_snapshot()) return orig_sct_exit_group(regs);
-
-  return 0;
-
+	return 0;
 }
 #else
 typedef long (*syscall_handler_t)(int error_code);
 
 // The original syscall handler that we removed to override exit_group()
-syscall_handler_t orig_sct_exit_group = NULL;
+syscall_handler_t orig_sct_exit_group;
 
-asmlinkage long sys_exit_group(int error_code) {
+asmlinkage long sys_exit_group(int error_code)
+{
+	if (exit_snapshot())
+		return orig_sct_exit_group(error_code);
 
-  if (exit_snapshot()) return orig_sct_exit_group(error_code);
-
-  return 0;
-
+	return 0;
 }
 #endif
 

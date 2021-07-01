@@ -3,12 +3,23 @@
 #include "task_data.h"
 #include "snapshot.h"
 
-int exit_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs) {
-  clean_snapshot();
+int exit_hook(unsigned long ip, unsigned long parent_ip, struct ftrace_ops *op,
+	      ftrace_regs_ptr regs)
+{
+	struct task_data *data = get_task_data(current);
 
-  return 0;
+	if (!data)
+		return 0;
 
+	DBG_PRINT("task_data entry found for process in %s\n", __func__);
+	DBG_PRINT("this process was probably killed by a signal");
+
+	if (had_snapshot(data)) {
+		DBG_PRINT("cleaning snapshot from %s", __func__);
+		clean_snapshot();
+	}
+
+	return 0;
 }
 
 void initialize_snapshot(struct task_data *data, int config) {
@@ -90,30 +101,43 @@ void recover_snapshot(void) {
 
 }
 
-int exit_snapshot(void) {
-  struct task_data *data = get_task_data(current);
-  if (data && (data->config & AFL_SNAPSHOT_EXIT) && have_snapshot(data)) {
+int exit_snapshot(void)
+{
+	struct task_data *data = get_task_data(current);
 
-    restore_snapshot(data);
-    return 0;
+	if (!data)
+		return 1;
 
-  }
+	DBG_PRINT("task_data entry found for process in %s\n", __func__);
 
-  if (data && had_snapshot(data)) clean_snapshot();
+	if ((data->config & AFL_SNAPSHOT_EXIT) && have_snapshot(data)) {
+		DBG_PRINT("restoring snapshot on exit\n");
+		restore_snapshot(data);
+		return 0;
+	}
 
-  return 1;
+	if (had_snapshot(data)) {
+		DBG_PRINT("cleaning snapshot from %s", __func__);
+		clean_snapshot();
+	}
 
+	DBG_PRINT("exiting previously snapshotted process\n");
+
+	return 1;
 }
 
-void clean_snapshot(void) {
+void clean_snapshot(void)
+{
+	struct task_data *data = get_task_data(current);
 
-  struct task_data *data = get_task_data(current);
-  if (!data) { return; }
+	if (!data)
+		return;
 
-  clean_memory_snapshot(data);
-  clean_files_snapshot(data);
-  clear_snapshot(data);
+	DBG_PRINT("cleaning snapshot\n");
 
-  remove_task_data(data);
+	clean_memory_snapshot(data);
+	clean_files_snapshot(data);
+	clear_snapshot(data);
 
+	remove_task_data(data);
 }
