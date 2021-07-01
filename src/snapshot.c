@@ -3,13 +3,12 @@
 #include "task_data.h"
 #include "snapshot.h"
 
-int exit_hook(unsigned long ip, unsigned long parent_ip, struct ftrace_ops *op,
-	      ftrace_regs_ptr regs)
+void __noreturn do_exit_hook(long code)
 {
 	struct task_data *data = get_task_data(current);
 
 	if (!data)
-		return 0;
+    do_exit_orig(code);
 
 	DBG_PRINT("task_data entry found for process in %s\n", __func__);
 	DBG_PRINT("this process was probably killed by a signal");
@@ -19,7 +18,7 @@ int exit_hook(unsigned long ip, unsigned long parent_ip, struct ftrace_ops *op,
 		clean_snapshot();
 	}
 
-	return 0;
+  do_exit_orig(code);
 }
 
 void initialize_snapshot(struct task_data *data, int config) {

@@ -127,7 +127,7 @@ static struct miscdevice misc_dev = {
 typedef int (*syscall_handler_t)(struct pt_regs *);
 
 // The original syscall handler that we removed to override exit_group()
-syscall_handler_t orig_sct_exit_group;
+syscall_handler_t sys_exit_group_orig;
 
 // TODO: non-x86 architectures syscall_table entries don't take pt_regs,
 // they take normal args
@@ -136,10 +136,10 @@ syscall_handler_t orig_sct_exit_group;
 // values to the actual __do_sys*
 // https://grok.osiris.cyber.nyu.edu/xref/linux/arch/x86/include/asm/syscall_wrapper.h?r=6e484764#161
 
-asmlinkage int sys_exit_group(struct pt_regs *regs)
+asmlinkage int sys_exit_group_hook(struct pt_regs *regs)
 {
 	if (exit_snapshot())
-		return orig_sct_exit_group(regs);
+		return sys_exit_group_orig(regs);
 
 	return 0;
 }
@@ -147,19 +147,23 @@ asmlinkage int sys_exit_group(struct pt_regs *regs)
 typedef long (*syscall_handler_t)(int error_code);
 
 // The original syscall handler that we removed to override exit_group()
-syscall_handler_t orig_sct_exit_group;
+syscall_handler_t sys_exit_group_orig;
 
-asmlinkage long sys_exit_group(int error_code)
+asmlinkage long sys_exit_group_hook(int error_code)
 {
 	if (exit_snapshot())
-		return orig_sct_exit_group(error_code);
+		return sys_exit_group_orig(error_code);
 
 	return 0;
 }
 #endif
 
-static struct ftrace_hook syscall_hooks[] = {
-	SYSCALL_HOOK("sys_exit_group", sys_exit_group, &orig_sct_exit_group),
+do_exit_t do_exit_orig;
+
+static struct ftrace_hook ftrace_hooks[] = {
+	SYSCALL_HOOK("sys_exit_group", sys_exit_group_hook,
+		     &sys_exit_group_orig),
+	HOOK("do_exit", do_exit_hook, &do_exit_orig),
 };
 
 static int resolve_non_exported_symbols(void)
@@ -196,7 +200,7 @@ static int __init mod_init(void)
 		return res;
 	}
 
-	res = fh_install_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
+	res = fh_install_hooks(ftrace_hooks, ARRAY_SIZE(ftrace_hooks));
 	if (res) {
 		FATAL("Unable to hook syscalls");
 		goto err_registration;
@@ -210,12 +214,6 @@ static int __init mod_init(void)
 
 	if (!try_hook("page_add_new_anon_rmap", &do_anonymous_hook)) {
 		FATAL("Unable to hook page_add_new_anon_rmap");
-		res = -ENOENT;
-		goto err_hooks;
-	}
-
-	if (!try_hook("do_exit", &exit_hook)) {
-		FATAL("Unable to hook do_exit");
 		res = -ENOENT;
 		goto err_hooks;
 	}
@@ -245,7 +243,7 @@ static void __exit mod_exit(void)
 {
 	SAYF("Unloading AFL++ snapshot LKM\n");
 	unhook_all();
-	fh_remove_hooks(syscall_hooks, ARRAY_SIZE(syscall_hooks));
+	fh_remove_hooks(ftrace_hooks, ARRAY_SIZE(ftrace_hooks));
 	misc_deregister(&misc_dev);
 }
 
