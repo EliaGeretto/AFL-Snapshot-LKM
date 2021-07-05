@@ -206,13 +206,13 @@ static int __init mod_init(void)
 		goto err_registration;
 	}
 
-	if (!try_hook("do_wp_page", &wp_page_hook)) {
+	if (!try_hook("do_wp_page", &do_wp_page_hook)) {
 		FATAL("Unable to hook do_wp_page");
 		res = -ENOENT;
 		goto err_hooks;
 	}
 
-	if (!try_hook("page_add_new_anon_rmap", &do_anonymous_hook)) {
+	if (!try_hook("page_add_new_anon_rmap", &page_add_new_anon_rmap_hook)) {
 		FATAL("Unable to hook page_add_new_anon_rmap");
 		res = -ENOENT;
 		goto err_hooks;

@@ -238,10 +238,10 @@ void clean_files_snapshot(struct task_data *data);
 
 void recover_threads_snapshot(struct task_data *data);
 
-int wp_page_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs);
-int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs);
+void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
+		     struct ftrace_ops *op, ftrace_regs_ptr regs);
+void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
+				 struct ftrace_ops *op, ftrace_regs_ptr regs);
 
 typedef void __noreturn (*do_exit_t)(long code);
 extern do_exit_t do_exit_orig;

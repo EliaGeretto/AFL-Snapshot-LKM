@@ -1,10 +1,45 @@
 #include "hook.h"
 #include "debug.h"
+#include "linux/mm.h"
 #include "task_data.h"
 #include "snapshot.h"
 
-static DEFINE_PER_CPU(struct task_struct *, last_task) = NULL;
-static DEFINE_PER_CPU(struct task_data *, last_data) = NULL;
+static DEFINE_PER_CPU(struct task_struct *, last_task);
+static DEFINE_PER_CPU(struct task_data *, last_task_data);
+
+static struct task_data *get_task_data_with_cache(struct task_struct *task)
+{
+	struct task_struct **cached_task = &get_cpu_var(last_task);
+	struct task_data **cached_data = &get_cpu_var(last_task_data);
+
+	struct task_data *data = NULL;
+
+	if (*cached_task == task) {
+		data = *cached_data;
+	} else {
+		data = get_task_data(task);
+
+		*cached_task = task;
+		*cached_data = data;
+	}
+
+	put_cpu_var(last_task);
+	put_cpu_var(last_task_data);
+
+	return data;
+}
+
+static void invalidate_task_data_cache(void)
+{
+	struct task_struct **cached_task = &get_cpu_var(last_task);
+	struct task_data **cached_data = &get_cpu_var(last_task_data);
+
+	*cached_task = NULL;
+	*cached_data = NULL;
+
+	put_cpu_var(last_task);
+	put_cpu_var(last_task_data);
+}
 
 pmd_t *get_page_pmd(unsigned long addr) {
 
@@ -307,10 +342,7 @@ void take_memory_snapshot(struct task_data *data) {
   struct vm_area_struct *pvma = current->mm->mmap;
   unsigned long          addr;
 
-  get_cpu_var(last_task) = NULL;
-  get_cpu_var(last_data) = NULL;
-  put_cpu_var(last_task);
-  put_cpu_var(last_data);
+  invalidate_task_data_cache();
 
   // Only do loops if DBG_PRINT actually does something.
   // Not sure if compiler would be smart enough to eliminate these anyways.
@@ -581,11 +613,7 @@ void clean_memory_snapshot(struct task_data *data) {
 
   struct task_struct* ltask = get_cpu_var(last_task);
   if (ltask == current) {
-
-    get_cpu_var(last_task) = NULL;
-    get_cpu_var(last_data) = NULL;
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
+    invalidate_task_data_cache();
   }
   put_cpu_var(last_task);
 
@@ -613,132 +641,101 @@ void clean_memory_snapshot(struct task_data *data) {
 
 }
 
-static long return_0_stub_func(void) {
-
-  return 0;
-
+static vm_fault_t do_wp_page_stub(struct vm_fault *vmf)
+{
+	return 0;
 }
 
-int wp_page_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs) {
+void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
+		     struct ftrace_ops *op, ftrace_regs_ptr regs)
+{
+	struct pt_regs *pregs = ftrace_get_regs(regs);
+	struct vm_fault *vmf = NULL;
 
-  struct vm_fault *     vmf;
-  struct mm_struct *    mm;
-  struct task_data *    data;
-  struct snapshot_page *ss_page;
-  struct page *         old_page;
-  pte_t                 entry;
-  char *                vfrom;
+	struct task_data *data = NULL;
+	struct snapshot_page *ss_page = NULL;
 
-  struct pt_regs* pregs = ftrace_get_regs(regs);
+	struct mm_struct *mm = NULL;
+	struct page *old_page = NULL;
+	pte_t entry;
+	void *vfrom = NULL;
+	unsigned long page_base_addr;
 
-  vmf = (struct vm_fault *)pregs->di;
-  mm = vmf->vma->vm_mm;
-  ss_page = NULL;
+	vmf = (struct vm_fault *)regs_get_kernel_argument(pregs, 0);
+	mm = vmf->vma->vm_mm;
 
-  struct task_struct* ltask = get_cpu_var(last_task);
-  if (ltask == mm->owner) {
+	data = get_task_data_with_cache(mm->owner);
+	if (!data || !have_snapshot(data))
+		return;
 
-    // fast path
-    data = get_cpu_var(last_data);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
-  } else {
+	ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
+	if (!ss_page)
+		return;
 
-    // query the radix tree
-    data = get_task_data(mm->owner);
-    get_cpu_var(last_task) = mm->owner;
-    get_cpu_var(last_data) = data;
-    put_cpu_var(last_task);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
+	if (ss_page->dirty)
+		return;
+	ss_page->dirty = true;
 
-  }
+	page_base_addr = vmf->address & PAGE_MASK;
 
-  if (data && have_snapshot(data)) {
+	DBG_PRINT("hooking page fault for 0x%016lx\n", page_base_addr);
 
-    ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
+	if (ss_page->in_dirty_list) {
+		WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n",
+		      ss_page->page_base, ss_page->dirty,
+		      ss_page->has_been_copied);
+	} else {
+		ss_page->in_dirty_list = true;
+		list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
+	}
 
-  } else
+	/* copy the page if necessary.
+	 * the page becomes COW page again. we do not need to take care of it.
+	 */
+	if (!ss_page->has_been_copied) {
+		DBG_PRINT("copying page 0x%016lx\n", page_base_addr);
 
-    return 0;  // continue
+		/* reserved old page data */
+		if (ss_page->page_data == NULL)
+			ss_page->page_data = kmalloc(PAGE_SIZE, GFP_ATOMIC);
 
-  if (!ss_page) {
+		old_page = pfn_to_page(pte_pfn(vmf->orig_pte));
+		vfrom = kmap_atomic(old_page);
+		memcpy(ss_page->page_data, vfrom, PAGE_SIZE);
+		kunmap_atomic(vfrom);
 
-    // not a snapshot'ed page
-    return 0;  // continue
+		ss_page->has_been_copied = true;
+	}
 
-  }
+	/* if this was originally a COW page, let the original page fault handler
+	 * handle it.
+	 */
+	if (!is_snapshot_page_private(ss_page))
+		return;
 
-  if (ss_page->dirty) return 0;
+	DBG_PRINT(
+		"handling page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n",
+		current->comm, vmf->address, (unsigned long)vmf->pte,
+		vmf->orig_pte.pte);
 
-  ss_page->dirty = true;
-  if (ss_page->in_dirty_list) {
-    WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
-  } else {
-    ss_page->in_dirty_list = true;
-    list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
-  }
+	/* change the page prot back to ro from rw */
+	entry = pte_mkwrite(vmf->orig_pte);
+	set_pte_at(mm, vmf->address, vmf->pte, entry);
 
-  DBG_PRINT("wp_page_hook 0x%08lx\n", vmf->address);
-  // dump_stack();
-  /* the page has been copied?
-   * the page becomes COW page again. we do not need to take care of it.
-   */
-  if (!ss_page->has_been_copied) {
+	k_flush_tlb_mm_range(mm, page_base_addr, page_base_addr + PAGE_SIZE,
+			     PAGE_SHIFT, false);
 
-    /* reserved old page data */
-    if (ss_page->page_data == NULL) {
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
 
-      ss_page->page_data = kmalloc(PAGE_SIZE, GFP_ATOMIC);
-
-    }
-
-    old_page = pfn_to_page(pte_pfn(vmf->orig_pte));
-    vfrom = kmap_atomic(old_page);
-    memcpy(ss_page->page_data, vfrom, PAGE_SIZE);
-    kunmap_atomic(vfrom);
-
-    ss_page->has_been_copied = true;
-
-  }
-
-  /* check if it is not COW/demand paging but the private page
-   * whose prot is set from rw to ro by snapshot.
-   */
-  if (is_snapshot_page_private(ss_page)) {
-
-    DBG_PRINT(
-        "page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n",
-        current->comm, vmf->address, (unsigned long)vmf->pte,
-        vmf->orig_pte.pte);
-
-    /* change the page prot back to ro from rw */
-    entry = pte_mkwrite(vmf->orig_pte);
-    set_pte_at(mm, vmf->address, vmf->pte, entry);
-    // ghost
-    // flush_tlb_page(vmf->vma, vmf->address & PAGE_MASK);
-    // ghost
-    unsigned long aligned_addr = vmf->address & PAGE_MASK;
-    k_flush_tlb_mm_range(mm, aligned_addr, aligned_addr + PAGE_SIZE, PAGE_SHIFT,
-                         false);
-
-    pte_unmap_unlock(vmf->pte, vmf->ptl);
-
-    // skip original function
-    pregs->ip = (long unsigned int)&return_0_stub_func;
-    return 1;
-
-  }
-
-  return 0;  // continue
-
+	// skip original function
+	pregs->ip = (unsigned long)&do_wp_page_stub;
 }
 
 // actually hooking page_add_new_anon_rmap, but we really only care about calls
 // from do_anonymous_page
-int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
-                   struct ftrace_ops *op, ftrace_regs_ptr regs) {
+void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
+				 struct ftrace_ops *op, ftrace_regs_ptr regs)
+{
 
   struct vm_area_struct *vma;
   struct mm_struct *     mm;
@@ -753,24 +750,7 @@ int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
   mm = vma->vm_mm;
   ss_page = NULL;
 
-  struct task_struct* ltask = get_cpu_var(last_task);
-  if (ltask == mm->owner) {
-
-    // fast path
-    data = get_cpu_var(last_data);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
-  } else {
-
-    // query the radix tree
-    data = get_task_data(mm->owner);
-    get_cpu_var(last_task) = mm->owner;
-    get_cpu_var(last_data) = data;
-    put_cpu_var(last_task);
-    put_cpu_var(last_task);
-    put_cpu_var(last_data);
-
-  }
+  data = get_task_data_with_cache(mm->owner);
 
   if (data && have_snapshot(data)) {
 
@@ -778,14 +758,14 @@ int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
 
   } else {
 
-    return 0;
+    return;
 
   }
 
   if (!ss_page) {
 
     /* not a snapshot'ed page */
-    return 0;
+    return;
 
   }
 
@@ -803,7 +783,7 @@ int do_anonymous_hook(unsigned long ip, unsigned long parent_ip,
     }
   }
 
-  return 0;
+  return;
 
 }
 
