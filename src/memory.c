@@ -230,6 +230,7 @@ struct snapshot_page *add_snapshot_page(struct task_data *data,
   sp->page_prot = 0;
   sp->has_been_copied = false;
   sp->dirty = false;
+  sp->in_dirty_list = false;
 
   return sp;
 
