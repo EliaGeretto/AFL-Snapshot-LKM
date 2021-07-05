@@ -27,12 +27,7 @@ void initialize_snapshot(struct task_data *data, int config) {
 
   data->config = config;
 
-  if (!had_snapshot(data)) {
-
-    set_had_snapshot(data);
-    hash_init(data->ss.ss_page);
-
-  }
+  set_had_snapshot(data);
 
   set_snapshot(data);
   // INIT_LIST_HEAD(&(data->ss.ss_mmap));

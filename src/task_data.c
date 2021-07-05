@@ -63,6 +63,8 @@ struct task_data *ensure_task_data(const struct task_struct *tsk)
 	}
 
 	data->tsk = tsk;
+
+	hash_init(data->ss.ss_page);
 	INIT_LIST_HEAD(&data->ss.dirty_pages);
 
 	spin_lock(&task_data_lock);
