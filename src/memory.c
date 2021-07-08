@@ -150,6 +150,11 @@ void exclude_vmrange(unsigned long start, unsigned long end) {
   struct task_data *data = ensure_task_data(current);
 
   struct vmrange_node *n = kmalloc(sizeof(struct vmrange_node), GFP_KERNEL);
+  if (!n) {
+	  FATAL("vmrange_node allocation failed");
+	  return;
+  }
+
   n->start = start;
   n->end = end;
   n->next = data->blocklist;
@@ -162,6 +167,11 @@ void include_vmrange(unsigned long start, unsigned long end) {
   struct task_data *data = ensure_task_data(current);
 
   struct vmrange_node *n = kmalloc(sizeof(struct vmrange_node), GFP_KERNEL);
+  if (!n) {
+	  FATAL("vmrange_node allocation failed");
+	  return;
+  }
+
   n->start = start;
   n->end = end;
   n->next = data->allowlist;
@@ -210,6 +220,11 @@ void add_snapshot_vma(struct task_data *data, unsigned long start,
   DBG_PRINT("Adding snapshot vmas start: 0x%08lx end: 0x%08lx\n", start, end);
 
   ss_vma = kmalloc(sizeof(struct snapshot_vma), GFP_ATOMIC);
+  if (!ss_vma) {
+    FATAL("snapshot_vma allocation failed!");
+    return;
+  }
+
   ss_vma->vm_start = start;
   ss_vma->vm_end = end;
 
@@ -255,6 +270,10 @@ struct snapshot_page *add_snapshot_page(struct task_data *data,
   if (sp == NULL) {
 
     sp = kmalloc(sizeof(struct snapshot_page), GFP_KERNEL);
+    if (!sp) {
+	    FATAL("could not allocate snapshot_page");
+	    return NULL;
+    }
 
     sp->page_base = page_base;
     sp->page_data = NULL;
@@ -696,8 +715,13 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 		DBG_PRINT("copying page 0x%016lx\n", page_base_addr);
 
 		/* reserved old page data */
-		if (ss_page->page_data == NULL)
+		if (!ss_page->page_data) {
 			ss_page->page_data = kmalloc(PAGE_SIZE, GFP_ATOMIC);
+			if (!ss_page->page_data) {
+				FATAL("could not allocate memory for page_data");
+				return;
+			}
+		}
 
 		old_page = pfn_to_page(pte_pfn(vmf->orig_pte));
 		vfrom = kmap_atomic(old_page);
