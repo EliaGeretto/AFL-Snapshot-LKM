@@ -1,6 +1,7 @@
 #include "hook.h"
 #include "debug.h"
 #include "linux/mm.h"
+#include "linux/types.h"
 #include "task_data.h"
 #include "snapshot.h"
 
@@ -625,39 +626,29 @@ void clean_snapshot_vmas(struct task_data *data) {
 
 }
 
-void clean_memory_snapshot(struct task_data *data) {
+void clean_memory_snapshot(struct task_data *data)
+{
+	struct task_struct *cached_task;
 
-  struct snapshot_page *sp;
-  int                   i;
+	struct snapshot_page *sp;
+	struct hlist_node *tmp;
+	int i;
 
-  struct task_struct* ltask = get_cpu_var(last_task);
-  if (ltask == current) {
-    invalidate_task_data_cache();
-  }
-  put_cpu_var(last_task);
+	cached_task = get_cpu_var(last_task);
+	if (cached_task == current) {
+		invalidate_task_data_cache();
+	}
+	put_cpu_var(last_task);
 
-  if (data->config & AFL_SNAPSHOT_MMAP) clean_snapshot_vmas(data);
+	if (data->config & AFL_SNAPSHOT_MMAP)
+		clean_snapshot_vmas(data);
 
-  // we need to always be a single item behind, otherwise we have a use after free!
-  struct snapshot_page *prev_sp = NULL;
-
-  hash_for_each(data->ss.ss_page, i, sp, next) {
-    if (prev_sp != NULL) {
-      hash_del(&prev_sp->next);
-      kfree(prev_sp);
-      prev_sp = NULL;
-    }
-
-    if (sp->page_data != NULL) kfree(sp->page_data);
-    prev_sp = sp;
-  }
-
-  if (prev_sp != NULL) {
-    hash_del(&prev_sp->next);
-    kfree(prev_sp);
-    prev_sp = NULL;
-  }
-
+	hash_for_each_safe (data->ss.ss_page, i, tmp, sp, next) {
+		if (sp->page_data)
+			kfree(sp->page_data);
+		hash_del(&sp->next);
+		kfree(sp);
+	}
 }
 
 static vm_fault_t do_wp_page_stub(struct vm_fault *vmf)
