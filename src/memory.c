@@ -357,67 +357,55 @@ inline bool is_stack(struct vm_area_struct *vma) {
 
 }
 
-void take_memory_snapshot(struct task_data *data) {
+void take_memory_snapshot(struct task_data *data)
+{
+	struct vm_area_struct *pvma = NULL;
+	unsigned long addr = 0;
 
-  struct vm_area_struct *pvma = current->mm->mmap;
-  unsigned long          addr;
+#ifdef DEBUG
+	struct vmrange_node *n;
 
-  invalidate_task_data_cache();
+	for (n = data->allowlist; n; n = n->next)
+		DBG_PRINT("Allowlist: 0x%08lx - 0x%08lx\n", n->start, n->end);
 
-  // Only do loops if DBG_PRINT actually does something.
-  // Not sure if compiler would be smart enough to eliminate these anyways.
-  #ifdef DEBUG
-  struct vmrange_node *n = data->allowlist;
-  while (n) {
+	for (n = data->blocklist; n; n = n->next)
+		DBG_PRINT("Blocklist: 0x%08lx - 0x%08lx\n", n->start, n->end);
+#endif
 
-    DBG_PRINT("Allowlist: 0x%08lx - 0x%08lx\n", n->start, n->end);
-    n = n->next;
+	invalidate_task_data_cache();
 
-  }
+	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
+		// Temporarily store all the vmas
+		if (data->config & AFL_SNAPSHOT_MMAP)
+			add_snapshot_vma(data, pvma->vm_start, pvma->vm_end);
 
-  n = data->blocklist;
-  while (n) {
+		// We only care about writable pages. Shared memory pages are
+		// skipped. If NOSTACK is specified, skip if this is the stack.
+		// Otherwise look into the allowlist.
+		if (!(((pvma->vm_flags & VM_WRITE) &&
+		       !(pvma->vm_flags & VM_SHARED) &&
+		       !((data->config & AFL_SNAPSHOT_NOSTACK) &&
+			 is_stack(pvma))) ||
+		      intersect_allowlist(pvma->vm_start, pvma->vm_end)))
+			continue;
 
-    DBG_PRINT("Blocklist: 0x%08lx - 0x%08lx\n", n->start, n->end);
-    n = n->next;
+		DBG_PRINT("Make snapshot start: 0x%08lx end: 0x%08lx\n",
+			  pvma->vm_start, pvma->vm_end);
 
-  }
-  #endif
+		for (addr = pvma->vm_start; addr < pvma->vm_end;
+		     addr += PAGE_SIZE) {
+			if (intersect_blocklist(addr, addr + PAGE_SIZE))
+				continue;
 
-  do {
+			if (((data->config & AFL_SNAPSHOT_BLOCK) ||
+			     ((data->config & AFL_SNAPSHOT_NOSTACK) &&
+			      is_stack(pvma))) &&
+			    !intersect_allowlist(addr, addr + PAGE_SIZE))
+				continue;
 
-    // temporarily store all the vmas
-    if (data->config & AFL_SNAPSHOT_MMAP)
-      add_snapshot_vma(data, pvma->vm_start, pvma->vm_end);
-
-    // We only care about writable pages. Shared memory pages are skipped
-    // if nostack is specified, skip if this this the stack
-    // Otherwise, look into the allowlist
-    // SAYF("Considering: 0x%016lx - 0x%016lx (stack: %d)", pvma->vm_start, pvma->vm_end, is_stack(pvma));
-    if (((pvma->vm_flags & VM_WRITE) && !(pvma->vm_flags & VM_SHARED) &&
-         !((data->config & AFL_SNAPSHOT_NOSTACK) && is_stack(pvma))) ||
-        intersect_allowlist(pvma->vm_start, pvma->vm_end)) {
-
-      DBG_PRINT("Make snapshot start: 0x%08lx end: 0x%08lx\n", pvma->vm_start,
-                pvma->vm_end);
-
-      for (addr = pvma->vm_start; addr < pvma->vm_end; addr += PAGE_SIZE) {
-
-        if (intersect_blocklist(addr, addr + PAGE_SIZE)) continue;
-        if (((data->config & AFL_SNAPSHOT_BLOCK) ||
-             ((data->config & AFL_SNAPSHOT_NOSTACK) && is_stack(pvma))) &&
-            !intersect_allowlist(addr, addr + PAGE_SIZE))
-          continue;
-
-        make_snapshot_page(data, pvma->vm_mm, addr);
-
-      }
-
-    }
-
-    pvma = pvma->vm_next;
-
-  } while (pvma != NULL);
+			make_snapshot_page(data, pvma->vm_mm, addr);
+		}
+	}
 }
 
 void munmap_new_vmas(struct task_data *data) {
