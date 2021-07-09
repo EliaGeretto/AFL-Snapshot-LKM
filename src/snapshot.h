@@ -106,11 +106,10 @@ struct task_data;
 
 // TODO lock VMA restore
 struct snapshot_vma {
+	unsigned long vm_start;
+	unsigned long vm_end;
 
-  unsigned long        vm_start;
-  unsigned long        vm_end;
-  struct snapshot_vma *vm_next;
-
+	struct list_head ss_vma_list;
 };
 
 struct snapshot_thread {
@@ -188,7 +187,7 @@ struct snapshot {
   unsigned int  status;
   unsigned long oldbrk;
 
-  struct snapshot_vma *ss_mmap;
+  struct list_head ss_vma_list;
 
   struct pt_regs regs;
 
@@ -228,8 +227,8 @@ typedef void (*put_files_struct_t)(struct files_struct *fs);
 extern put_files_struct_t put_files_struct_ptr;
 #define put_files_struct put_files_struct_ptr
 
-void take_memory_snapshot(struct task_data *data);
-void recover_memory_snapshot(struct task_data *data);
+int take_memory_snapshot(struct task_data *data);
+int recover_memory_snapshot(struct task_data *data);
 void clean_memory_snapshot(struct task_data *data);
 
 int take_files_snapshot(struct task_data *data);

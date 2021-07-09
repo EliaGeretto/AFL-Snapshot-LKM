@@ -30,8 +30,6 @@ void initialize_snapshot(struct task_data *data, int config) {
   set_had_snapshot(data);
 
   set_snapshot(data);
-  // INIT_LIST_HEAD(&(data->ss.ss_mmap));
-  data->ss.ss_mmap = NULL;
 
   // copy current regs context
   data->ss.regs = *regs;

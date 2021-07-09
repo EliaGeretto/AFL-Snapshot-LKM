@@ -1,9 +1,12 @@
 #include "hook.h"
 #include "debug.h"
+#include "linux/gfp.h"
+#include "linux/list.h"
 #include "linux/mm.h"
 #include "linux/types.h"
 #include "task_data.h"
 #include "snapshot.h"
+#include "vdso/limits.h"
 
 static DEFINE_PER_CPU(struct task_struct *, last_task);
 static DEFINE_PER_CPU(struct task_data *, last_task_data);
@@ -212,39 +215,27 @@ int intersect_allowlist(unsigned long start, unsigned long end) {
 
 }
 
-void add_snapshot_vma(struct task_data *data, unsigned long start,
-                      unsigned long end) {
+int add_snapshot_vma(struct task_data *data, unsigned long start,
+		     unsigned long end)
+{
+	struct snapshot_vma *ss_vma;
 
-  struct snapshot_vma *ss_vma;
-  struct snapshot_vma *p;
+	DBG_PRINT("adding snapshot_vma, start: 0x%08lx end: 0x%08lx\n", start,
+		  end);
 
-  DBG_PRINT("Adding snapshot vmas start: 0x%08lx end: 0x%08lx\n", start, end);
+	ss_vma = kmalloc(sizeof(struct snapshot_vma), GFP_KERNEL);
+	if (!ss_vma) {
+		FATAL("snapshot_vma allocation failed!");
+		return -ENOMEM;
+	}
 
-  ss_vma = kmalloc(sizeof(struct snapshot_vma), GFP_ATOMIC);
-  if (!ss_vma) {
-    FATAL("snapshot_vma allocation failed!");
-    return;
-  }
+	ss_vma->vm_start = start;
+	ss_vma->vm_end = end;
+	INIT_LIST_HEAD(&ss_vma->ss_vma_list);
 
-  ss_vma->vm_start = start;
-  ss_vma->vm_end = end;
+	list_add_tail(&ss_vma->ss_vma_list, &data->ss.ss_vma_list);
 
-  if (data->ss.ss_mmap == NULL) {
-
-    data->ss.ss_mmap = ss_vma;
-
-  } else {
-
-    p = data->ss.ss_mmap;
-    while (p->vm_next != NULL)
-      p = p->vm_next;
-
-    p->vm_next = ss_vma;
-
-  }
-
-  ss_vma->vm_next = NULL;
-
+	return 0;
 }
 
 struct snapshot_page *get_snapshot_page(struct task_data *data,
@@ -357,10 +348,11 @@ inline bool is_stack(struct vm_area_struct *vma) {
 
 }
 
-void take_memory_snapshot(struct task_data *data)
+int take_memory_snapshot(struct task_data *data)
 {
 	struct vm_area_struct *pvma = NULL;
 	unsigned long addr = 0;
+	int res = 0;
 
 #ifdef DEBUG
 	struct vmrange_node *n;
@@ -376,8 +368,12 @@ void take_memory_snapshot(struct task_data *data)
 
 	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
 		// Temporarily store all the vmas
-		if (data->config & AFL_SNAPSHOT_MMAP)
-			add_snapshot_vma(data, pvma->vm_start, pvma->vm_end);
+		if (data->config & AFL_SNAPSHOT_MMAP) {
+			res = add_snapshot_vma(data, pvma->vm_start,
+					       pvma->vm_end);
+			if (res)
+				return res;
+		}
 
 		// We only care about writable pages. Shared memory pages are
 		// skipped. If NOSTACK is specified, skip if this is the stack.
@@ -406,96 +402,87 @@ void take_memory_snapshot(struct task_data *data)
 			make_snapshot_page(data, pvma->vm_mm, addr);
 		}
 	}
+
+	return 0;
 }
 
-void munmap_new_vmas(struct task_data *data) {
+int munmap_new_vmas(struct task_data *data)
+{
+	struct vm_area_struct *vma_iter = data->tsk->mm->mmap;
+	struct vm_area_struct *next_vma_iter = NULL;
+	struct snapshot_vma *ss_vma_iter = list_first_entry(
+		&data->ss.ss_vma_list, struct snapshot_vma, ss_vma_list);
 
-  struct vm_area_struct *vma = data->tsk->mm->mmap;
-  struct snapshot_vma *  ss_vma = data->ss.ss_mmap;
+	unsigned long cursor = 0;
+	unsigned long next_cursor = 0;
 
-  unsigned long old_start = ss_vma->vm_start;
-  unsigned long old_end = ss_vma->vm_end;
-  unsigned long cur_start = vma->vm_start;
-  unsigned long cur_end = vma->vm_end;
+	unsigned long next_vma_pos = 0;
+	unsigned long next_ss_vma_pos = 0;
 
-  /* we believe that normally, the original mappings of the father process
-   * will not be munmapped by the child process when fuzzing.
-   *
-   * load library on-the-fly?
-   */
-  do {
+	bool in_ss_vmas = false;
+	bool in_vmas = false;
 
-    if (cur_start < old_start) {
+	int res = 0;
 
-      if (old_start >= cur_end) {
+	DBG_PRINT("unmapping new vmas:\n");
 
-        DBG_PRINT("new: from 0x%08lx to 0x%08lx\n", cur_start, cur_end);
-        vm_munmap(cur_start, cur_end - cur_start);
-        vma = vma->vm_next;
-        if (!vma) break;
-        cur_start = vma->vm_start;
-        cur_end = vma->vm_end;
+	while (vma_iter ||
+	       !list_entry_is_head(ss_vma_iter, &data->ss.ss_vma_list,
+				   ss_vma_list)) {
+		// Calculate next valid positions for vma lists.
+		if (vma_iter) {
+			// `vm_munmap` may free the `vm_area_struct`, so save `vm_next` here.
+			next_vma_iter = vma_iter->vm_next;
+			next_vma_pos =
+				in_vmas ? vma_iter->vm_end : vma_iter->vm_start;
+		} else {
+			next_vma_iter = NULL;
+			next_vma_pos = ULONG_MAX;
+		}
 
-      } else {
+		if (!list_entry_is_head(ss_vma_iter, &data->ss.ss_vma_list,
+					ss_vma_list)) {
+			next_ss_vma_pos = in_ss_vmas ? ss_vma_iter->vm_end :
+							     ss_vma_iter->vm_start;
+		} else {
+			next_ss_vma_pos = ULONG_MAX;
+		}
 
-        DBG_PRINT("new: from 0x%08lx to 0x%08lx\n", cur_start, old_start);
-        vm_munmap(cur_start, old_start - cur_start);
-        cur_start = old_start;
+		next_cursor = min(next_vma_pos, next_ss_vma_pos);
 
-      }
+		// `in_vmas` and `in_ss_vmas` hold for the interval [cursor,
+		// next_cursor).
+		if (next_cursor != cursor && in_vmas && !in_ss_vmas) {
+			DBG_PRINT("  unmapping (0x%08lx, 0x%08lx)\n", cursor,
+				  next_cursor);
+			res = vm_munmap(cursor, next_cursor - cursor);
+			if (res) {
+				FATAL("munmap failed, start: 0x%08lx, end: 0x%08lx\n",
+				      cursor, next_cursor);
+				return res;
+			}
+		} else if (next_cursor != cursor && !in_vmas && in_ss_vmas) {
+			FATAL("missing memory, start: 0x%08lx, end: 0x%08lx\n",
+			      cursor, next_cursor);
+		}
 
-    } else {
+		if (next_cursor == next_vma_pos) {
+			in_vmas = !in_vmas;
+			if (!in_vmas)
+				vma_iter = next_vma_iter;
+		}
 
-      if (cur_end < old_end) {
+		if (next_cursor == next_ss_vma_pos) {
+			in_ss_vmas = !in_ss_vmas;
+			if (!in_ss_vmas)
+				ss_vma_iter = list_next_entry(ss_vma_iter,
+							      ss_vma_list);
+		}
 
-        vma = vma->vm_next;
-        if (!vma) break;
-        cur_start = vma->vm_start;
-        cur_end = vma->vm_end;
+		cursor = next_cursor;
+	}
 
-        old_start = cur_end;
-
-      } else if (cur_end == old_end) {
-
-        vma = vma->vm_next;
-        if (!vma) break;
-        cur_start = vma->vm_start;
-        cur_end = vma->vm_end;
-
-        ss_vma = ss_vma->vm_next;
-        if (!ss_vma) break;
-        old_start = ss_vma->vm_start;
-        old_end = ss_vma->vm_end;
-
-      } else if (cur_end > old_end) {
-
-        cur_start = old_end;
-
-        ss_vma = ss_vma->vm_next;
-        if (!ss_vma) break;
-        old_start = ss_vma->vm_start;
-        old_end = ss_vma->vm_end;
-
-      }
-
-    }
-
-  } while (true);
-
-  if (vma) {
-
-    DBG_PRINT("new: from 0x%08lx to 0x%08lx\n", cur_start, cur_end);
-    vm_munmap(cur_start, cur_end - cur_start);
-    while (vma->vm_next != NULL) {
-
-      vma = vma->vm_next;
-      DBG_PRINT("new: from 0x%08lx to 0x%08lx\n", vma->vm_start, vma->vm_end);
-      vm_munmap(vma->vm_start, vma->vm_end - vma->vm_start);
-
-    }
-
-  }
-
+	return 0;
 }
 
 void do_recover_page(struct snapshot_page *sp) {
@@ -522,7 +509,7 @@ void do_recover_none_pte(struct snapshot_page *sp) {
 
 }
 
-void recover_memory_snapshot(struct task_data *data) {
+int recover_memory_snapshot(struct task_data *data) {
 
   struct snapshot_page *sp, *prev_sp = NULL;
   struct mm_struct *    mm = data->tsk->mm;
@@ -531,7 +518,14 @@ void recover_memory_snapshot(struct task_data *data) {
 
   int count = 0;
 
-  if (data->config & AFL_SNAPSHOT_MMAP) munmap_new_vmas(data);
+  int res = 0;
+
+  if (data->config & AFL_SNAPSHOT_MMAP) {
+    res = munmap_new_vmas(data);
+    if (res)
+      return res;
+  }
+
   // Instead of iterating over all pages in the snapshot and then restoring the dirty ones,
   // we can save a lot of computing time by keeping a list of only dirty pages.
   // Since we know exactly when pages match the conditions below, we can just insert them into the dirty list then.
@@ -594,24 +588,23 @@ void recover_memory_snapshot(struct task_data *data) {
   // haha this is really dumb
   // surely this will not come back to bite me later, right??
   INIT_LIST_HEAD(&data->ss.dirty_pages);
+
+  return 0;
 }
 
-void clean_snapshot_vmas(struct task_data *data) {
+void clean_snapshot_vmas(struct task_data *data)
+{
+	struct snapshot_vma *ss_vma, *next;
 
-  struct snapshot_vma *p = data->ss.ss_mmap;
-  struct snapshot_vma *q;
+	DBG_PRINT("freeing snapshot vmas:\n");
 
-  DBG_PRINT("freeing snapshot vmas\n");
-
-  while (p != NULL) {
-
-    DBG_PRINT("start: 0x%08lx end: 0x%08lx\n", p->vm_start, p->vm_end);
-    q = p;
-    p = p->vm_next;
-    kfree(q);
-
-  }
-
+	list_for_each_entry_safe (ss_vma, next, &data->ss.ss_vma_list,
+				  ss_vma_list) {
+		DBG_PRINT("  start: 0x%08lx end: 0x%08lx\n", ss_vma->vm_start,
+			  ss_vma->vm_end);
+		list_del(&ss_vma->ss_vma_list);
+		kfree(ss_vma);
+	}
 }
 
 void clean_memory_snapshot(struct task_data *data)
