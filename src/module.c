@@ -40,13 +40,14 @@ put_files_struct_t put_files_struct_ptr;
 
 long mod_dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 
+  struct afl_snapshot_vmrange_args args;
+
   switch (cmd) {
 
     case AFL_SNAPSHOT_EXCLUDE_VMRANGE: {
 
       DBG_PRINT("Calling afl_snapshot_exclude_vmrange");
 
-      struct afl_snapshot_vmrange_args args;
       if (copy_from_user(&args, (void *)arg,
                          sizeof(struct afl_snapshot_vmrange_args)))
         return -EINVAL;
@@ -60,7 +61,6 @@ long mod_dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 
       DBG_PRINT("Calling afl_snapshot_include_vmrange");
 
-      struct afl_snapshot_vmrange_args args;
       if (copy_from_user(&args, (void *)arg,
                          sizeof(struct afl_snapshot_vmrange_args)))
         return -EINVAL;
