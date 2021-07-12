@@ -8,8 +8,8 @@
 #include "snapshot.h"
 #include "vdso/limits.h"
 
-static DEFINE_PER_CPU(struct task_struct *, last_task);
-static DEFINE_PER_CPU(struct task_data *, last_task_data);
+static DEFINE_PER_CPU(struct task_struct *, last_task) = NULL;
+static DEFINE_PER_CPU(struct task_data *, last_task_data) = NULL;
 
 static struct task_data *get_task_data_with_cache(struct task_struct *task)
 {
@@ -33,16 +33,18 @@ static struct task_data *get_task_data_with_cache(struct task_struct *task)
 	return data;
 }
 
-static void invalidate_task_data_cache(void)
+static void invalidate_task_data_cache(const struct task_struct *task)
 {
-	struct task_struct **cached_task = &get_cpu_var(last_task);
-	struct task_data **cached_data = &get_cpu_var(last_task_data);
+	struct task_struct **cached_task;
+	int i;
 
-	*cached_task = NULL;
-	*cached_data = NULL;
-
-	put_cpu_var(last_task);
-	put_cpu_var(last_task_data);
+	for_each_possible_cpu (i) {
+		cached_task = &per_cpu(last_task, i);
+		if (*cached_task == task) {
+			*cached_task = NULL;
+			per_cpu(last_task_data, i) = NULL;
+		}
+	}
 }
 
 pmd_t *get_page_pmd(unsigned long addr) {
@@ -382,7 +384,7 @@ int take_memory_snapshot(struct task_data *data)
 		DBG_PRINT("Blocklist: 0x%08lx - 0x%08lx\n", n->start, n->end);
 #endif
 
-	invalidate_task_data_cache();
+	invalidate_task_data_cache(data->tsk);
 
 	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
 		// Temporarily store all the vmas
@@ -611,17 +613,11 @@ void clean_snapshot_vmas(struct task_data *data)
 
 void clean_memory_snapshot(struct task_data *data)
 {
-	struct task_struct *cached_task;
-
 	struct snapshot_page *sp;
 	struct hlist_node *tmp;
 	int i;
 
-	cached_task = get_cpu_var(last_task);
-	if (cached_task == current) {
-		invalidate_task_data_cache();
-	}
-	put_cpu_var(last_task);
+	invalidate_task_data_cache(data->tsk);
 
 	if (data->config & AFL_SNAPSHOT_MMAP)
 		clean_snapshot_vmas(data);
