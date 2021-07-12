@@ -270,6 +270,7 @@ struct snapshot_page *add_snapshot_page(struct task_data *data,
     sp->page_base = page_base;
     sp->page_data = NULL;
     hash_add(data->ss.ss_page, &sp->next, sp->page_base);
+    INIT_LIST_HEAD(&sp->dirty_list);
 
   }
 
