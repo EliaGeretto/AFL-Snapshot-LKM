@@ -238,6 +238,23 @@ int add_snapshot_vma(struct task_data *data, unsigned long start,
 	return 0;
 }
 
+#ifdef DEBUG
+void dump_memory_snapshot(struct task_data *data)
+{
+	struct snapshot_page *sp;
+	int i;
+
+	if (!data)
+		return;
+
+	DBG_PRINT("dumping snapshot pages:");
+	hash_for_each (data->ss.ss_pages, i, sp, next) {
+		DBG_PRINT("  %d: 0x%016lx %s\n", i, sp->page_base,
+			  sp->dirty ? "dirty" : "clean");
+	}
+}
+#endif
+
 struct snapshot_page *get_snapshot_page(struct task_data *data,
                                         unsigned long     page_base) {
 

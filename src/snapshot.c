@@ -51,6 +51,10 @@ int take_snapshot(int config) {
       pr_err("error while snapshotting files");
     }
 
+#ifdef DEBUG
+    dump_memory_snapshot(data);
+#endif
+
     return 1;
 
   }
@@ -76,6 +80,10 @@ void recover_state(struct task_data *data) {
 }
 
 void restore_snapshot(struct task_data *data) {
+
+#ifdef DEBUG
+  dump_memory_snapshot(data);
+#endif
 
   recover_threads_snapshot(data);
   recover_memory_snapshot(data);
@@ -124,6 +132,10 @@ void clean_snapshot(void)
 
 	if (!data)
 		return;
+
+#ifdef DEBUG
+  dump_memory_snapshot(data);
+#endif
 
 	DBG_PRINT("cleaning snapshot\n");
 

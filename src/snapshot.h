@@ -231,6 +231,10 @@ int take_memory_snapshot(struct task_data *data);
 int recover_memory_snapshot(struct task_data *data);
 void clean_memory_snapshot(struct task_data *data);
 
+#ifdef DEBUG
+void dump_memory_snapshot(struct task_data *data);
+#endif
+
 int take_files_snapshot(struct task_data *data);
 int recover_files_snapshot(struct task_data *data);
 void clean_files_snapshot(struct task_data *data);
