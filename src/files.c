@@ -80,7 +80,7 @@ int take_files_snapshot(struct task_data *data)
 	max_fds = rcu_dereference_raw(files_copy->fdt)->max_fds;
 
 	pr_debug("allocating memory for %u offsets\n", max_fds);
-	offsets = kvmalloc_array(max_fds, sizeof(loff_t), GFP_KERNEL_ACCOUNT);
+	offsets = kmalloc_array(max_fds, sizeof(loff_t), GFP_KERNEL);
 	if (!offsets) {
 		error = -ENOMEM;
 		goto out_release;
@@ -99,7 +99,7 @@ int take_files_snapshot(struct task_data *data)
 
 out_release:
 	put_files_struct(files_copy);
-	kvfree(offsets);
+	kfree(offsets);
 
 out:
 	return error;
@@ -175,7 +175,7 @@ void clean_files_snapshot(struct task_data *data)
 
 	if (files_snap->offsets) {
 		pr_debug("freeing offsets array\n");
-		kvfree(files_snap->offsets);
+		kfree(files_snap->offsets);
 		files_snap->offsets = NULL;
 	}
 }

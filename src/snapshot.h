@@ -84,7 +84,6 @@
 #include <linux/uprobes.h>
 #include <linux/user-return-notifier.h>
 #include <linux/vmacache.h>
-#include <linux/vmalloc.h>
 
 #include <asm/cacheflush.h>
 #undef MODULE
