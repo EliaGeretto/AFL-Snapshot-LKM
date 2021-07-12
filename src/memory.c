@@ -247,7 +247,7 @@ void dump_memory_snapshot(struct task_data *data)
 	if (!data)
 		return;
 
-	DBG_PRINT("dumping dirty pages:");
+	DBG_PRINT("dumping dirty pages from task_data %p:", data);
 	hash_for_each (data->ss.ss_pages, i, sp, next) {
 		if (sp->dirty)
 			DBG_PRINT("  %d: 0x%016lx\n", i, sp->page_base);
@@ -663,7 +663,8 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 
 	page_base_addr = vmf->address & PAGE_MASK;
 
-	DBG_PRINT("searching snapshot_page for 0x%016lx\n", page_base_addr);
+	DBG_PRINT("searching snapshot_page for 0x%016lx in task_data: %p\n",
+		  page_base_addr, data);
 	ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
 	if (!ss_page)
 		return;
@@ -754,7 +755,8 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 	if (!data || !have_snapshot(data))
 		return;
 
-	DBG_PRINT("searching snapshot_page for 0x%016lx\n", page_base_addr);
+	DBG_PRINT("searching snapshot_page for 0x%016lx in task_data: %p\n",
+		  page_base_addr, data);
 	ss_page = get_snapshot_page(data, page_base_addr);
 	if (!ss_page)
 		/* not a snapshot'ed page */
