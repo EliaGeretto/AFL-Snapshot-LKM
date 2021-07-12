@@ -243,7 +243,7 @@ struct snapshot_page *get_snapshot_page(struct task_data *data,
 
   struct snapshot_page *sp;
 
-  hash_for_each_possible(data->ss.ss_page, sp, next, page_base) {
+  hash_for_each_possible(data->ss.ss_pages, sp, next, page_base) {
 
     if (sp->page_base == page_base) return sp;
 
@@ -269,7 +269,7 @@ struct snapshot_page *add_snapshot_page(struct task_data *data,
 
     sp->page_base = page_base;
     sp->page_data = NULL;
-    hash_add(data->ss.ss_page, &sp->next, sp->page_base);
+    hash_add(data->ss.ss_pages, &sp->next, sp->page_base);
     INIT_LIST_HEAD(&sp->dirty_list);
 
   }
@@ -526,7 +526,7 @@ int recover_memory_snapshot(struct task_data *data)
 			return res;
 	}
 
-	hash_for_each (data->ss.ss_page, i, sp, next) {
+	hash_for_each (data->ss.ss_pages, i, sp, next) {
 		if (sp->dirty && sp->has_been_copied) {
 			// it has been captured by page fault
 
@@ -609,7 +609,7 @@ void clean_memory_snapshot(struct task_data *data)
 	if (data->config & AFL_SNAPSHOT_MMAP)
 		clean_snapshot_vmas(data);
 
-	hash_for_each_safe (data->ss.ss_page, i, tmp, sp, next) {
+	hash_for_each_safe (data->ss.ss_pages, i, tmp, sp, next) {
 		if (sp->page_data)
 			kfree(sp->page_data);
 		hash_del(&sp->next);

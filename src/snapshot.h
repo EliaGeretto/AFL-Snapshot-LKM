@@ -193,7 +193,7 @@ struct snapshot {
 
   struct open_files_snapshot ss_files;
 
-  DECLARE_HASHTABLE(ss_page, SNAPSHOT_HASHTABLE_SZ);
+  DECLARE_HASHTABLE(ss_pages, SNAPSHOT_HASHTABLE_SZ);
 
   struct list_head dirty_pages;
 
