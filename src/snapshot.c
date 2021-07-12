@@ -3,12 +3,14 @@
 #include "task_data.h"
 #include "snapshot.h"
 
-void __noreturn do_exit_hook(long code)
+void do_exit_hook(long code)
 {
 	struct task_data *data = get_task_data(current);
 
-	if (!data)
-    do_exit_orig(code);
+	if (!data) {
+		do_exit_orig(code);
+		BUG();
+	}
 
 	DBG_PRINT("task_data entry found for process in %s\n", __func__);
 	DBG_PRINT("this process was probably killed by a signal");
@@ -18,7 +20,8 @@ void __noreturn do_exit_hook(long code)
 		clean_snapshot();
 	}
 
-  do_exit_orig(code);
+	do_exit_orig(code);
+	BUG();
 }
 
 void initialize_snapshot(struct task_data *data, int config) {

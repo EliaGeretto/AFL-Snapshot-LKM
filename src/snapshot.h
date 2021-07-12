@@ -246,9 +246,9 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 				 struct ftrace_ops *op, ftrace_regs_ptr regs);
 
-typedef void __noreturn (*do_exit_t)(long code);
+typedef void (*do_exit_t)(long code);
 extern do_exit_t do_exit_orig;
-void __noreturn do_exit_hook(long code);
+void do_exit_hook(long code);
 
 int  take_snapshot(int config);
 void recover_snapshot(void);
