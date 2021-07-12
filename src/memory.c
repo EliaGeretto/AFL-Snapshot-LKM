@@ -644,6 +644,9 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 	if (!data || !have_snapshot(data))
 		return;
 
+	page_base_addr = vmf->address & PAGE_MASK;
+
+	DBG_PRINT("searching snapshot_page for 0x%016lx\n", page_base_addr);
 	ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
 	if (!ss_page)
 		return;
@@ -651,8 +654,6 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 	if (ss_page->dirty)
 		return;
 	ss_page->dirty = true;
-
-	page_base_addr = vmf->address & PAGE_MASK;
 
 	DBG_PRINT("hooking page fault for 0x%016lx\n", page_base_addr);
 
@@ -717,55 +718,49 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 				 struct ftrace_ops *op, ftrace_regs_ptr regs)
 {
+	struct pt_regs *pregs = ftrace_get_regs(regs);
+	struct vm_area_struct *vma;
+	unsigned long address;
 
-  struct vm_area_struct *vma;
-  struct mm_struct *     mm;
-  struct task_data *     data;
-  struct snapshot_page * ss_page;
-  unsigned long          address;
+	struct mm_struct *mm;
+	struct task_data *data = NULL;
+	struct snapshot_page *ss_page = NULL;
+	unsigned long page_base_addr;
 
-  struct pt_regs* pregs = ftrace_get_regs(regs);
+	vma = (struct vm_area_struct *)regs_get_kernel_argument(pregs, 1);
+	mm = vma->vm_mm;
 
-  vma = (struct vm_area_struct *)pregs->si;
-  address = pregs->dx;
-  mm = vma->vm_mm;
-  ss_page = NULL;
+	address = regs_get_kernel_argument(pregs, 2);
+	page_base_addr = address & PAGE_MASK;
 
-  data = get_task_data_with_cache(mm->owner);
+	data = get_task_data_with_cache(mm->owner);
+	if (!data || !have_snapshot(data))
+		return;
 
-  if (data && have_snapshot(data)) {
+	DBG_PRINT("searching snapshot_page for 0x%016lx\n", page_base_addr);
+	ss_page = get_snapshot_page(data, page_base_addr);
+	if (!ss_page)
+		/* not a snapshot'ed page */
+		return;
 
-    ss_page = get_snapshot_page(data, address & PAGE_MASK);
+	DBG_PRINT("do_anonymous_page 0x%08lx\n", address);
+	// dump_stack();
 
-  } else {
+	// HAVE PTE NOW
+	ss_page->has_had_pte = true;
+	if (is_snapshot_page_none_pte(ss_page)) {
+		if (ss_page->in_dirty_list) {
+			WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n",
+			      ss_page->page_base, ss_page->dirty,
+			      ss_page->has_been_copied);
+		} else {
+			ss_page->in_dirty_list = true;
+			list_add_tail(&ss_page->dirty_list,
+				      &data->ss.dirty_pages);
+		}
+	}
 
-    return;
-
-  }
-
-  if (!ss_page) {
-
-    /* not a snapshot'ed page */
-    return;
-
-  }
-
-  DBG_PRINT("do_anonymous_page 0x%08lx\n", address);
-  // dump_stack();
-
-  // HAVE PTE NOW
-  ss_page->has_had_pte = true;
-  if (is_snapshot_page_none_pte(ss_page)) {
-    if (ss_page->in_dirty_list) {
-      WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n", ss_page->page_base, ss_page->dirty, ss_page->has_been_copied);
-    } else {
-      ss_page->in_dirty_list = true;
-      list_add_tail(&ss_page->dirty_list, &data->ss.dirty_pages);
-    }
-  }
-
-  return;
-
+	return;
 }
 
 // void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
