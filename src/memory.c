@@ -509,87 +509,71 @@ void do_recover_none_pte(struct snapshot_page *sp) {
 
 }
 
-int recover_memory_snapshot(struct task_data *data) {
+int recover_memory_snapshot(struct task_data *data)
+{
+	struct snapshot_page *sp;
+	int i;
 
-  struct snapshot_page *sp, *prev_sp = NULL;
-  struct mm_struct *    mm = data->tsk->mm;
-  pte_t *               pte, entry;
-  int                   i;
+	struct mm_struct *mm = data->tsk->mm;
+	pte_t *pte;
 
-  int count = 0;
+	int res = 0;
 
-  int res = 0;
+	if (data->config & AFL_SNAPSHOT_MMAP) {
+		res = munmap_new_vmas(data);
+		if (res)
+			return res;
+	}
 
-  if (data->config & AFL_SNAPSHOT_MMAP) {
-    res = munmap_new_vmas(data);
-    if (res)
-      return res;
-  }
+	hash_for_each (data->ss.ss_page, i, sp, next) {
+		if (sp->dirty && sp->has_been_copied) {
+			// it has been captured by page fault
 
-  // Instead of iterating over all pages in the snapshot and then restoring the dirty ones,
-  // we can save a lot of computing time by keeping a list of only dirty pages.
-  // Since we know exactly when pages match the conditions below, we can just insert them into the dirty list then.
-  // This had a massive boost on performance for me, >50%. (Might be more or less depending on a few factors).
-  //
-  // original loop below
-  hash_for_each(data->ss.ss_page, i, sp, next) {
-  struct list_head* ptr;
-  // for (ptr = data->ss.dirty_pages.next; ptr != &data->ss.dirty_pages; ptr = ptr->next){
-    count++;
-    // sp = list_entry(ptr, struct snapshot_page, dirty_list);
-    if (sp->dirty &&
-        sp->has_been_copied) {  // it has been captured by page fault
+			do_recover_page(sp); // copy old content
+			sp->has_had_pte = true;
 
-      do_recover_page(sp);  // copy old content
-      sp->has_had_pte = true;
+			pte = walk_page_table(sp->page_base);
+			if (!pte)
+				continue;
 
-      pte = walk_page_table(sp->page_base);
-      if (pte) {
+			/* Private rw page */
+			DBG_PRINT("private writable addr: 0x%08lx\n",
+				  sp->page_base);
+			ptep_set_wrprotect(mm, sp->page_base, pte);
+			set_snapshot_page_private(sp);
 
-        /* Private rw page */
-        DBG_PRINT("private writable addr: 0x%08lx\n", sp->page_base);
-        ptep_set_wrprotect(mm, sp->page_base, pte);
-        set_snapshot_page_private(sp);
+			/* flush tlb to make the pte change effective */
+			k_flush_tlb_mm_range(mm, sp->page_base,
+					     sp->page_base + PAGE_SIZE,
+					     PAGE_SHIFT, false);
+			DBG_PRINT("writable now: %d\n", pte_write(*pte));
 
-        /* flush tlb to make the pte change effective */
-        k_flush_tlb_mm_range(mm, sp->page_base, sp->page_base + PAGE_SIZE,
-                             PAGE_SHIFT, false);
-        DBG_PRINT("writable now: %d\n", pte_write(*pte));
+			pte_unmap(pte);
 
-        pte_unmap(pte);
+		} else if (is_snapshot_page_private(sp)) {
+			// private page that has not been captured
+			// still write protected
 
-      }
+		} else if (is_snapshot_page_none_pte(sp) && sp->has_had_pte) {
+			do_recover_none_pte(sp);
 
-    } else if (is_snapshot_page_private(sp)) {
+			set_snapshot_page_none_pte(sp);
+			sp->has_had_pte = false;
+		}
 
-      // private page that has not been captured
-      // still write protected
+		if (sp->in_dirty_list) {
+			DBG_PRINT("page was in dirty list: 0x%016lx\n",
+				  sp->page_base);
+			sp->in_dirty_list = false;
+			list_del(&sp->dirty_list);
+		}
+	}
 
-    } else if (is_snapshot_page_none_pte(sp) && sp->has_had_pte) {
+	if (!list_empty(&data->ss.dirty_pages)) {
+		WARNF("dirty list is not empty");
+	}
 
-      do_recover_none_pte(sp);
-
-      set_snapshot_page_none_pte(sp);
-      sp->has_had_pte = false;
-
-    }
-    if (!sp->in_dirty_list) {
-      // WARNF("0x%016lx: sp->in_dirty_list = false, but we just encountered it in dirty list!?", sp->page_base);
-    }
-    sp->in_dirty_list = false;
-    // if (ptr->next == ptr || ptr->prev == ptr) {
-    //   WARNF("0x%016lx: DETECTED CYCLE IN DIRTY LIST: ptr: %px, ptr->next: %px", sp->page_base, &ptr, ptr->next);
-    //   break;
-    // }
-  }
-
-  DBG_PRINT("HAD %d dirty pages!\n", count);
-
-  // haha this is really dumb
-  // surely this will not come back to bite me later, right??
-  INIT_LIST_HEAD(&data->ss.dirty_pages);
-
-  return 0;
+	return 0;
 }
 
 void clean_snapshot_vmas(struct task_data *data)
