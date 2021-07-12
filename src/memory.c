@@ -247,10 +247,10 @@ void dump_memory_snapshot(struct task_data *data)
 	if (!data)
 		return;
 
-	DBG_PRINT("dumping snapshot pages:");
+	DBG_PRINT("dumping dirty pages:");
 	hash_for_each (data->ss.ss_pages, i, sp, next) {
-		DBG_PRINT("  %d: 0x%016lx %s\n", i, sp->page_base,
-			  sp->dirty ? "dirty" : "clean");
+		if (sp->dirty)
+			DBG_PRINT("  %d: 0x%016lx\n", i, sp->page_base);
 	}
 }
 #endif
