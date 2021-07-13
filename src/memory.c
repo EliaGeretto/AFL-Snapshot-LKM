@@ -47,55 +47,8 @@ static void invalidate_task_data_cache(const struct task_struct *task)
 	}
 }
 
-pmd_t *get_page_pmd(unsigned long addr) {
-
-  pgd_t *pgd;
-  p4d_t *p4d;
-  pud_t *pud;
-  pmd_t *pmd = NULL;
-
-  struct mm_struct *mm = current->mm;
-
-  pgd = pgd_offset(mm, addr);
-  if (pgd_none(*pgd) || pgd_bad(*pgd)) {
-
-    // DBG_PRINT("Invalid pgd.");
-    goto out;
-
-  }
-
-  p4d = p4d_offset(pgd, addr);
-  if (p4d_none(*p4d) || p4d_bad(*p4d)) {
-
-    // DBG_PRINT("Invalid p4d.");
-    goto out;
-
-  }
-
-  pud = pud_offset(p4d, addr);
-  if (pud_none(*pud) || pud_bad(*pud)) {
-
-    // DBG_PRINT("Invalid pud.");
-    goto out;
-
-  }
-
-  pmd = pmd_offset(pud, addr);
-  if (pmd_none(*pmd) || pmd_bad(*pmd)) {
-
-    // DBG_PRINT("Invalid pmd.");
-    pmd = NULL;
-    goto out;
-
-  }
-
-out:
-  return pmd;
-
-}
-
-pte_t *walk_page_table(unsigned long addr) {
-
+static pte_t *walk_page_table(unsigned long addr)
+{
   pgd_t *pgd;
   p4d_t *p4d;
   pud_t *pud;
@@ -185,8 +138,8 @@ void include_vmrange(unsigned long start, unsigned long end) {
 
 }
 
-int intersect_blocklist(unsigned long start, unsigned long end) {
-
+static int intersect_blocklist(unsigned long start, unsigned long end)
+{
   struct task_data *data = ensure_task_data(current);
 
   struct vmrange_node *n = data->blocklist;
@@ -201,8 +154,8 @@ int intersect_blocklist(unsigned long start, unsigned long end) {
 
 }
 
-int intersect_allowlist(unsigned long start, unsigned long end) {
-
+static int intersect_allowlist(unsigned long start, unsigned long end)
+{
   struct task_data *data = ensure_task_data(current);
 
   struct vmrange_node *n = data->allowlist;
@@ -217,8 +170,8 @@ int intersect_allowlist(unsigned long start, unsigned long end) {
 
 }
 
-int add_snapshot_vma(struct task_data *data, unsigned long start,
-		     unsigned long end)
+static int add_snapshot_vma(struct task_data *data, unsigned long start,
+			    unsigned long end)
 {
 	struct snapshot_vma *ss_vma;
 
@@ -257,9 +210,9 @@ void dump_memory_snapshot(struct task_data *data)
 }
 #endif
 
-struct snapshot_page *get_snapshot_page(struct task_data *data,
-                                        unsigned long     page_base) {
-
+static struct snapshot_page *get_snapshot_page(struct task_data *data,
+					       unsigned long page_base)
+{
   struct snapshot_page *sp;
 
   hash_for_each_possible(data->ss.ss_pages, sp, next, page_base) {
@@ -272,9 +225,9 @@ struct snapshot_page *get_snapshot_page(struct task_data *data,
 
 }
 
-struct snapshot_page *add_snapshot_page(struct task_data *data,
-                                        unsigned long     page_base) {
-
+static struct snapshot_page *add_snapshot_page(struct task_data *data,
+					       unsigned long page_base)
+{
   struct snapshot_page *sp;
 
   sp = get_snapshot_page(data, page_base);
@@ -302,9 +255,9 @@ struct snapshot_page *add_snapshot_page(struct task_data *data,
 
 }
 
-void make_snapshot_page(struct task_data *data, struct mm_struct *mm,
-                        unsigned long addr) {
-
+static void make_snapshot_page(struct task_data *data, struct mm_struct *mm,
+			       unsigned long addr)
+{
   pte_t *               pte;
   struct snapshot_page *sp;
   struct page *         page;
@@ -426,7 +379,7 @@ int take_memory_snapshot(struct task_data *data)
 	return 0;
 }
 
-int munmap_new_vmas(struct task_data *data)
+static int munmap_new_vmas(struct task_data *data)
 {
 	struct vm_area_struct *vma_iter = data->tsk->mm->mmap;
 	struct vm_area_struct *next_vma_iter = NULL;
@@ -505,8 +458,8 @@ int munmap_new_vmas(struct task_data *data)
 	return 0;
 }
 
-void do_recover_page(struct snapshot_page *sp) {
-
+static void do_recover_page(struct snapshot_page *sp)
+{
   DBG_PRINT(
       "found reserved page: 0x%08lx page_base: 0x%08lx page_prot: "
       "0x%08lx\n",
@@ -518,8 +471,8 @@ void do_recover_page(struct snapshot_page *sp) {
 
 }
 
-void do_recover_none_pte(struct snapshot_page *sp) {
-
+static void do_recover_none_pte(struct snapshot_page *sp)
+{
   struct mm_struct *mm = current->mm;
 
   DBG_PRINT("found none_pte refreshed page_base: 0x%08lx page_prot: 0x%08lx\n",
@@ -596,7 +549,7 @@ int recover_memory_snapshot(struct task_data *data)
 	return 0;
 }
 
-void clean_snapshot_vmas(struct task_data *data)
+static void clean_snapshot_vmas(struct task_data *data)
 {
 	struct snapshot_vma *ss_vma, *next;
 

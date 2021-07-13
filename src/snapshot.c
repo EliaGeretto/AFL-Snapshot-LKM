@@ -24,7 +24,7 @@ void do_exit_hook(long code)
 	BUG();
 }
 
-void initialize_snapshot(struct task_data *data, int config) {
+static void initialize_snapshot(struct task_data *data, int config) {
 
   struct pt_regs *regs = task_pt_regs(current);
 
@@ -66,7 +66,7 @@ int take_snapshot(int config) {
 
 }
 
-void recover_state(struct task_data *data) {
+static void recover_state(struct task_data *data) {
 
   if (data->config & AFL_SNAPSHOT_REGS) {
 
@@ -82,7 +82,7 @@ void recover_state(struct task_data *data) {
 
 }
 
-void restore_snapshot(struct task_data *data) {
+static void restore_snapshot(struct task_data *data) {
 
 #ifdef DEBUG
   dump_memory_snapshot(data);

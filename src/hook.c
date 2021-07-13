@@ -6,6 +6,7 @@
 #include <linux/version.h>
 #include "debug.h"
 #include "ftrace_util.h"
+#include "hook.h"
 
 struct hook {
 	char *symbol_name;
@@ -13,7 +14,7 @@ struct hook {
 	struct list_head l;
 };
 
-LIST_HEAD(hooks);
+static LIST_HEAD(hooks);
 
 int try_hook(char *func_name, void *handler)
 {

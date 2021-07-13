@@ -38,8 +38,9 @@ void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
 dup_fd_t dup_fd_ptr;
 put_files_struct_t put_files_struct_ptr;
 
-long mod_dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
-
+static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
+			  unsigned long arg)
+{
   struct afl_snapshot_vmrange_args args;
 
   switch (cmd) {
@@ -127,7 +128,7 @@ static struct miscdevice misc_dev = {
 typedef int (*syscall_handler_t)(struct pt_regs *);
 
 // The original syscall handler that we removed to override exit_group()
-syscall_handler_t sys_exit_group_orig;
+static syscall_handler_t sys_exit_group_orig;
 
 // TODO: non-x86 architectures syscall_table entries don't take pt_regs,
 // they take normal args
@@ -136,7 +137,7 @@ syscall_handler_t sys_exit_group_orig;
 // values to the actual __do_sys*
 // https://grok.osiris.cyber.nyu.edu/xref/linux/arch/x86/include/asm/syscall_wrapper.h?r=6e484764#161
 
-asmlinkage int sys_exit_group_hook(struct pt_regs *regs)
+static asmlinkage int sys_exit_group_hook(struct pt_regs *regs)
 {
 	if (exit_snapshot())
 		return sys_exit_group_orig(regs);
@@ -149,7 +150,7 @@ typedef long (*syscall_handler_t)(int error_code);
 // The original syscall handler that we removed to override exit_group()
 syscall_handler_t sys_exit_group_orig;
 
-asmlinkage long sys_exit_group_hook(int error_code)
+static asmlinkage long sys_exit_group_hook(int error_code)
 {
 	if (exit_snapshot())
 		return sys_exit_group_orig(error_code);
