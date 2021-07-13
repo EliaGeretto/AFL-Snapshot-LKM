@@ -17,7 +17,7 @@ static int save_file_offset(const void *p, struct file *file, unsigned int fd)
 	loff_t *offsets = (loff_t *)p;
 
 	offsets[fd] = vfs_llseek(file, 0, SEEK_CUR);
-	pr_debug("recording fd: %u, offset: %lld\n", fd, offsets[fd]);
+	DBG_PRINT("recording fd: %u, offset: %lld\n", fd, offsets[fd]);
 
 	return 0;
 }
@@ -34,14 +34,14 @@ static int restore_file_offset(const void *p, struct file *file,
 
 	res = vfs_llseek(file, offsets[fd], SEEK_SET);
 
-	pr_debug("restoring fd: %u, offset: %lld, res: %lld\n", fd, offsets[fd],
+	DBG_PRINT("restoring fd: %u, offset: %lld, res: %lld\n", fd, offsets[fd],
 		 res);
 
 	if (res < 0) {
-		pr_err("error while seeking back fd %u: %lld", fd, res);
+		FATAL("error while seeking back fd %u: %lld", fd, res);
 		return res;
 	} else if (res != offsets[fd]) {
-		pr_err("could not seek fd %u back to old position (%lld), "
+		FATAL("could not seek fd %u back to old position (%lld), "
 		       "current position (%lld)",
 		       fd, offsets[fd], res);
 		return 1;
@@ -68,7 +68,7 @@ int take_files_snapshot(struct task_data *data)
 		return 0;
 	}
 
-	pr_debug("duplicating files structure for current thread\n");
+	DBG_PRINT("duplicating files structure for current thread\n");
 	files_copy = dup_fd(current_files, NR_OPEN_MAX, &error);
 	if (!files_copy)
 		goto out;
@@ -79,14 +79,14 @@ int take_files_snapshot(struct task_data *data)
 	 */
 	max_fds = rcu_dereference_raw(files_copy->fdt)->max_fds;
 
-	pr_debug("allocating memory for %u offsets\n", max_fds);
+	DBG_PRINT("allocating memory for %u offsets\n", max_fds);
 	offsets = kmalloc_array(max_fds, sizeof(loff_t), GFP_KERNEL);
 	if (!offsets) {
 		error = -ENOMEM;
 		goto out_release;
 	}
 
-	pr_debug("saving offsets for all fds\n");
+	DBG_PRINT("saving offsets for all fds\n");
 	memset(offsets, -1, max_fds * sizeof(loff_t));
 	error = iterate_fd(files_copy, 0, save_file_offset, offsets);
 	if (error)
@@ -124,12 +124,12 @@ int recover_files_snapshot(struct task_data *data)
 		goto out;
 	}
 
-	pr_debug("duplicating snapshotted files structure\n");
+	DBG_PRINT("duplicating snapshotted files structure\n");
 	restored_files = dup_fd(files_snap->files, NR_OPEN_MAX, &error);
 	if (!restored_files)
 		goto out;
 
-	pr_debug("seeking all files back to the original position\n");
+	DBG_PRINT("seeking all files back to the original position\n");
 	error = iterate_fd(restored_files, 0, restore_file_offset,
 			   files_snap->offsets);
 	if (error)
@@ -141,7 +141,7 @@ int recover_files_snapshot(struct task_data *data)
 		if (task_iter->files != current_old_files)
 			continue;
 
-		pr_debug("replacing files structure for thread in current "
+		DBG_PRINT("replacing files structure for thread in current "
 			 "process\n");
 
 		if (task_iter != current_task)
@@ -168,13 +168,13 @@ void clean_files_snapshot(struct task_data *data)
 	struct open_files_snapshot *files_snap = &data->ss.ss_files;
 
 	if (files_snap->files) {
-		pr_debug("dropping files structure snapshot\n");
+		DBG_PRINT("dropping files structure snapshot\n");
 		put_files_struct(files_snap->files);
 		files_snap->files = NULL;
 	}
 
 	if (files_snap->offsets) {
-		pr_debug("freeing offsets array\n");
+		DBG_PRINT("freeing offsets array\n");
 		kfree(files_snap->offsets);
 		files_snap->offsets = NULL;
 	}
