@@ -207,6 +207,11 @@ void dump_memory_snapshot(struct task_data *data)
 		if (sp->dirty)
 			DBG_PRINT("  %d: 0x%016lx\n", i, sp->page_base);
 	}
+
+	DBG_PRINT("dumping pages in dirty list:\n");
+	list_for_each_entry (sp, &data->ss.dirty_pages, dirty_list) {
+		DBG_PRINT("  0x%016lx\n", sp->page_base);
+	}
 }
 #endif
 
@@ -543,7 +548,7 @@ int recover_memory_snapshot(struct task_data *data)
 	}
 
 	if (!list_empty(&data->ss.dirty_pages)) {
-		WARNF("dirty list is not empty");
+		WARNF("dirty list is not empty (multiple threads?)");
 	}
 
 	return 0;
@@ -606,6 +611,8 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 	vmf = (struct vm_fault *)regs_get_kernel_argument(pregs, 0);
 	mm = vmf->vma->vm_mm;
 
+	// XXX: mm->owner is probably the group leader, not necessarily the
+	// thread that triggered the page fault.
 	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
 	if (!data || !have_snapshot(data))
 		return;
@@ -700,6 +707,8 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 	address = regs_get_kernel_argument(pregs, 2);
 	page_base_addr = address & PAGE_MASK;
 
+	// XXX: mm->owner is probably the group leader, not necessarily the
+	// thread that triggered the page fault.
 	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
 	if (!data || !have_snapshot(data))
 		return;
