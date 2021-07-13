@@ -49,7 +49,7 @@ static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
 
       DBG_PRINT("Calling afl_snapshot_exclude_vmrange");
 
-      if (copy_from_user(&args, (void *)arg,
+      if (copy_from_user(&args, (void __user *)arg,
                          sizeof(struct afl_snapshot_vmrange_args)))
         return -EINVAL;
 
@@ -62,7 +62,7 @@ static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
 
       DBG_PRINT("Calling afl_snapshot_include_vmrange");
 
-      if (copy_from_user(&args, (void *)arg,
+      if (copy_from_user(&args, (void __user *)arg,
                          sizeof(struct afl_snapshot_vmrange_args)))
         return -EINVAL;
 

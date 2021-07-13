@@ -606,7 +606,7 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 	vmf = (struct vm_fault *)regs_get_kernel_argument(pregs, 0);
 	mm = vmf->vma->vm_mm;
 
-	data = get_task_data_with_cache(mm->owner);
+	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
 	if (!data || !have_snapshot(data))
 		return;
 
@@ -700,7 +700,7 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 	address = regs_get_kernel_argument(pregs, 2);
 	page_base_addr = address & PAGE_MASK;
 
-	data = get_task_data_with_cache(mm->owner);
+	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
 	if (!data || !have_snapshot(data))
 		return;
 
