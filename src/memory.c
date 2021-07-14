@@ -490,7 +490,7 @@ static void do_recover_none_pte(struct snapshot_page *sp)
 int recover_memory_snapshot(struct task_data *data)
 {
 	struct snapshot_page *sp;
-	int i;
+	struct snapshot_page *n;
 
 	struct mm_struct *mm = data->tsk->mm;
 	pte_t *pte;
@@ -503,7 +503,9 @@ int recover_memory_snapshot(struct task_data *data)
 			return res;
 	}
 
-	hash_for_each (data->ss.ss_pages, i, sp, next) {
+	list_for_each_entry_safe (sp, n, &data->ss.dirty_pages, dirty_list) {
+		DBG_PRINT("restoring page: 0x%016lx\n", sp->page_base);
+
 		if (sp->dirty && sp->has_been_copied) {
 			// it has been captured by page fault
 
@@ -539,16 +541,12 @@ int recover_memory_snapshot(struct task_data *data)
 			sp->has_had_pte = false;
 		}
 
-		if (sp->in_dirty_list) {
-			DBG_PRINT("page was in dirty list: 0x%016lx\n",
-				  sp->page_base);
-			sp->in_dirty_list = false;
-			list_del(&sp->dirty_list);
+		if (!sp->in_dirty_list) {
+			WARNF("in_dirty_list not set: 0x%016lx\n",
+			      sp->page_base);
 		}
-	}
-
-	if (!list_empty(&data->ss.dirty_pages)) {
-		WARNF("dirty list is not empty (multiple threads?)");
+		sp->in_dirty_list = false;
+		list_del(&sp->dirty_list);
 	}
 
 	return 0;
