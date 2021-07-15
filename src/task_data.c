@@ -9,25 +9,19 @@ static DEFINE_SPINLOCK(task_data_lock);
 static void task_data_free_callback(struct rcu_head *rcu)
 {
 	struct task_data *data = container_of(rcu, struct task_data, rcu);
-	struct vmrange_node *node;
+	struct vmrange *range, *next;
 
 	DBG_PRINT("dropping task_data: %p\n", data);
 
-	node = data->blocklist;
-	while (node) {
-		data->blocklist = node->next;
-		kfree(node);
-		node = data->blocklist;
+	list_for_each_entry_safe(range, next, &data->blocklist, node) {
+		kfree(range);
+		list_del(&range->node);
 	}
-	data->blocklist = NULL;
 
-	node = data->allowlist;
-	while (node) {
-		data->allowlist = node->next;
-		kfree(node);
-		node = data->allowlist;
+	list_for_each_entry_safe(range, next, &data->allowlist, node) {
+		kfree(range);
+		list_del(&range->node);
 	}
-	data->allowlist = NULL;
 
 	kfree(data);
 }
@@ -67,6 +61,9 @@ struct task_data *ensure_task_data(const struct task_struct *tsk)
 	INIT_LIST_HEAD(&data->ss.ss_vma_list);
 	hash_init(data->ss.ss_pages);
 	INIT_LIST_HEAD(&data->ss.dirty_pages);
+
+	INIT_LIST_HEAD(&data->allowlist);
+	INIT_LIST_HEAD(&data->blocklist);
 
 	spin_lock(&task_data_lock);
 	list_add_rcu(&data->list, &task_data_list);

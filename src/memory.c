@@ -104,48 +104,50 @@ out:
 
 // TODO lock thee lists
 
-void exclude_vmrange(unsigned long start, unsigned long end) {
+void exclude_vmrange(unsigned long start, unsigned long end)
+{
+	struct task_data *data = ensure_task_data(current);
+	struct vmrange *n;
 
-  struct task_data *data = ensure_task_data(current);
+	n = kmalloc(sizeof(struct vmrange), GFP_KERNEL);
+	if (!n) {
+		FATAL("vmrange_node allocation failed");
+		return;
+	}
 
-  struct vmrange_node *n = kmalloc(sizeof(struct vmrange_node), GFP_KERNEL);
-  if (!n) {
-	  FATAL("vmrange_node allocation failed");
-	  return;
-  }
+	n->start = start;
+	n->end = end;
+	INIT_LIST_HEAD(&n->node);
 
-  n->start = start;
-  n->end = end;
-  n->next = data->blocklist;
-  data->blocklist = n;
-
+	list_add(&data->blocklist, &n->node);
 }
 
-void include_vmrange(unsigned long start, unsigned long end) {
+void include_vmrange(unsigned long start, unsigned long end)
+{
+	struct task_data *data = ensure_task_data(current);
+	struct vmrange *n;
 
-  struct task_data *data = ensure_task_data(current);
+	n = kmalloc(sizeof(struct vmrange), GFP_KERNEL);
+	if (!n) {
+		FATAL("vmrange_node allocation failed");
+		return;
+	}
 
-  struct vmrange_node *n = kmalloc(sizeof(struct vmrange_node), GFP_KERNEL);
-  if (!n) {
-	  FATAL("vmrange_node allocation failed");
-	  return;
-  }
+	n->start = start;
+	n->end = end;
+	INIT_LIST_HEAD(&n->node);
 
-  n->start = start;
-  n->end = end;
-  n->next = data->allowlist;
-  data->allowlist = n;
-
+	list_add(&data->allowlist, &n->node);
 }
 
 static int intersect_blocklist(struct task_data *data, unsigned long start,
 			       unsigned long end)
 {
-	struct vmrange_node *n = data->blocklist;
-	while (n) {
+	struct vmrange *n = NULL;
+
+	list_for_each_entry (n, &data->blocklist, node) {
 		if (end > n->start && start < n->end)
 			return 1;
-		n = n->next;
 	}
 
 	return 0;
@@ -154,11 +156,11 @@ static int intersect_blocklist(struct task_data *data, unsigned long start,
 static int intersect_allowlist(struct task_data *data, unsigned long start,
 			       unsigned long end)
 {
-	struct vmrange_node *n = data->allowlist;
-	while (n) {
+	struct vmrange *n = NULL;
+
+	list_for_each_entry (n, &data->allowlist, node) {
 		if (end > n->start && start < n->end)
 			return 1;
-		n = n->next;
 	}
 
 	return 0;
@@ -327,12 +329,12 @@ int take_memory_snapshot(struct task_data *data)
 	int res = 0;
 
 #ifdef DEBUG
-	struct vmrange_node *n;
+	struct vmrange *n = NULL;
 
-	for (n = data->allowlist; n; n = n->next)
+	list_for_each_entry (n, &data->allowlist, node)
 		DBG_PRINT("Allowlist: 0x%08lx - 0x%08lx\n", n->start, n->end);
 
-	for (n = data->blocklist; n; n = n->next)
+	list_for_each_entry (n, &data->blocklist, node)
 		DBG_PRINT("Blocklist: 0x%08lx - 0x%08lx\n", n->start, n->end);
 #endif
 

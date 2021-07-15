@@ -5,28 +5,23 @@
 #include <linux/list.h>
 #include <linux/sched.h>
 
-struct vmrange_node {
+struct vmrange {
+	unsigned long start;
+	unsigned long end;
 
-  unsigned long start;
-  unsigned long end;
-
-  struct vmrange_node *next;
-
+	struct list_head node;
 };
 
 struct task_data {
+	const struct task_struct *tsk;
 
-  // what task_struct is this for?
-  const struct task_struct *tsk;
+	struct snapshot ss;
 
-  struct snapshot ss;
+	struct list_head allowlist, blocklist;
+	int config;
 
-  struct vmrange_node *allowlist, *blocklist;
-  int                  config;
-
-  struct list_head list;
-  struct rcu_head  rcu;
-
+	struct list_head list;
+	struct rcu_head rcu;
 };
 
 struct task_data *get_task_data(const struct task_struct *tsk);
