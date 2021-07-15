@@ -10,8 +10,8 @@
 #include "snapshot.h"
 #include "vdso/limits.h"
 
-static DEFINE_PER_CPU(struct task_struct *, last_task) = NULL;
-static DEFINE_PER_CPU(struct task_data *, last_task_data) = NULL;
+static DEFINE_PER_CPU(struct task_struct *, last_task);
+static DEFINE_PER_CPU(struct task_data *, last_task_data);
 
 static struct task_data *get_task_data_with_cache(struct task_struct *task)
 {
@@ -51,57 +51,46 @@ static void invalidate_task_data_cache(const struct task_struct *task)
 
 static pte_t *walk_page_table(unsigned long addr)
 {
-  pgd_t *pgd;
-  p4d_t *p4d;
-  pud_t *pud;
-  pmd_t *pmd;
-  pte_t *ptep = NULL;
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *ptep = NULL;
 
-  struct mm_struct *mm = current->mm;
+	struct mm_struct *mm = current->mm;
 
-  pgd = pgd_offset(mm, addr);
-  if (pgd_none(*pgd) || pgd_bad(*pgd)) {
+	pgd = pgd_offset(mm, addr);
+	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
+		// DBG_PRINT("Invalid pgd.");
+		goto out;
+	}
 
-    // DBG_PRINT("Invalid pgd.");
-    goto out;
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+		// DBG_PRINT("Invalid p4d.");
+		goto out;
+	}
 
-  }
+	pud = pud_offset(p4d, addr);
+	if (pud_none(*pud) || pud_bad(*pud)) {
+		// DBG_PRINT("Invalid pud.");
+		goto out;
+	}
 
-  p4d = p4d_offset(pgd, addr);
-  if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+	pmd = pmd_offset(pud, addr);
+	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
+		// DBG_PRINT("Invalid pmd.");
+		goto out;
+	}
 
-    // DBG_PRINT("Invalid p4d.");
-    goto out;
-
-  }
-
-  pud = pud_offset(p4d, addr);
-  if (pud_none(*pud) || pud_bad(*pud)) {
-
-    // DBG_PRINT("Invalid pud.");
-    goto out;
-
-  }
-
-  pmd = pmd_offset(pud, addr);
-  if (pmd_none(*pmd) || pmd_bad(*pmd)) {
-
-    // DBG_PRINT("Invalid pmd.");
-    goto out;
-
-  }
-
-  ptep = pte_offset_map(pmd, addr);
-  if (!ptep) {
-
-    // DBG_PRINT("[NEW] Invalid pte.");
-    goto out;
-
-  }
+	ptep = pte_offset_map(pmd, addr);
+	if (!ptep) {
+		// DBG_PRINT("[NEW] Invalid pte.");
+		goto out;
+	}
 
 out:
-  return ptep;
-
+	return ptep;
 }
 
 // TODO lock thee lists
@@ -218,16 +207,14 @@ void dump_memory_snapshot(struct task_data *data)
 static struct snapshot_page *get_snapshot_page(struct task_data *data,
 					       unsigned long page_base)
 {
-  struct snapshot_page *sp;
+	struct snapshot_page *sp;
 
-  hash_for_each_possible(data->ss.ss_pages, sp, next, page_base) {
+	hash_for_each_possible (data->ss.ss_pages, sp, next, page_base) {
+		if (sp->page_base == page_base)
+			return sp;
+	}
 
-    if (sp->page_base == page_base) return sp;
-
-  }
-
-  return NULL;
-
+	return NULL;
 }
 
 static struct snapshot_page *add_snapshot_page(struct task_data *data,
@@ -567,26 +554,25 @@ static int munmap_new_vmas(struct task_data *data)
 
 static void do_recover_page(struct snapshot_page *sp)
 {
-  DBG_PRINT(
-      "found reserved page: 0x%08lx page_base: 0x%08lx page_prot: "
-      "0x%08lx\n",
-      (unsigned long)sp->page_data, (unsigned long)sp->page_base,
-      sp->page_prot);
-  if (copy_to_user((void __user *)sp->page_base, sp->page_data, PAGE_SIZE) != 0)
-    DBG_PRINT("incomplete copy_to_user\n");
-  sp->dirty = false;
-
+	DBG_PRINT(
+		"found reserved page: 0x%08lx page_base: 0x%08lx page_prot: 0x%08lx\n",
+		(unsigned long)sp->page_data, (unsigned long)sp->page_base,
+		sp->page_prot);
+	if (copy_to_user((void __user *)sp->page_base, sp->page_data,
+			 PAGE_SIZE) != 0)
+		DBG_PRINT("incomplete copy_to_user\n");
+	sp->dirty = false;
 }
 
 static void do_recover_none_pte(struct snapshot_page *sp)
 {
-  struct mm_struct *mm = current->mm;
+	struct mm_struct *mm = current->mm;
 
-  DBG_PRINT("found none_pte refreshed page_base: 0x%08lx page_prot: 0x%08lx\n",
-            sp->page_base, sp->page_prot);
+	DBG_PRINT(
+		"found none_pte refreshed page_base: 0x%08lx page_prot: 0x%08lx\n",
+		sp->page_base, sp->page_prot);
 
-  k_zap_page_range(mm->mmap, sp->page_base, PAGE_SIZE);
-
+	k_zap_page_range(mm->mmap, sp->page_base, PAGE_SIZE);
 }
 
 int recover_memory_snapshot(struct task_data *data)
@@ -681,8 +667,7 @@ void clean_memory_snapshot(struct task_data *data)
 		clean_snapshot_vmas(data);
 
 	hash_for_each_safe (data->ss.ss_pages, i, tmp, sp, next) {
-		if (sp->page_data)
-			kfree(sp->page_data);
+		kfree(sp->page_data);
 		hash_del(&sp->next);
 		kfree(sp);
 	}
@@ -836,8 +821,6 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 				      &data->ss.dirty_pages);
 		}
 	}
-
-	return;
 }
 
 // void finish_fault_hook(unsigned long ip, unsigned long parent_ip,
