@@ -138,36 +138,30 @@ void include_vmrange(unsigned long start, unsigned long end) {
 
 }
 
-static int intersect_blocklist(unsigned long start, unsigned long end)
+static int intersect_blocklist(struct task_data *data, unsigned long start,
+			       unsigned long end)
 {
-  struct task_data *data = ensure_task_data(current);
+	struct vmrange_node *n = data->blocklist;
+	while (n) {
+		if (end > n->start && start < n->end)
+			return 1;
+		n = n->next;
+	}
 
-  struct vmrange_node *n = data->blocklist;
-  while (n) {
-
-    if (end > n->start && start < n->end) return 1;
-    n = n->next;
-
-  }
-
-  return 0;
-
+	return 0;
 }
 
-static int intersect_allowlist(unsigned long start, unsigned long end)
+static int intersect_allowlist(struct task_data *data, unsigned long start,
+			       unsigned long end)
 {
-  struct task_data *data = ensure_task_data(current);
+	struct vmrange_node *n = data->allowlist;
+	while (n) {
+		if (end > n->start && start < n->end)
+			return 1;
+		n = n->next;
+	}
 
-  struct vmrange_node *n = data->allowlist;
-  while (n) {
-
-    if (end > n->start && start < n->end) return 1;
-    n = n->next;
-
-  }
-
-  return 0;
-
+	return 0;
 }
 
 static int add_snapshot_vma(struct task_data *data, unsigned long start,
@@ -360,7 +354,7 @@ int take_memory_snapshot(struct task_data *data)
 		       !(pvma->vm_flags & VM_SHARED) &&
 		       !((data->config & AFL_SNAPSHOT_NOSTACK) &&
 			 is_stack(pvma))) ||
-		      intersect_allowlist(pvma->vm_start, pvma->vm_end)))
+		      intersect_allowlist(data, pvma->vm_start, pvma->vm_end)))
 			continue;
 
 		DBG_PRINT("Make snapshot start: 0x%08lx end: 0x%08lx\n",
@@ -368,13 +362,13 @@ int take_memory_snapshot(struct task_data *data)
 
 		for (addr = pvma->vm_start; addr < pvma->vm_end;
 		     addr += PAGE_SIZE) {
-			if (intersect_blocklist(addr, addr + PAGE_SIZE))
+			if (intersect_blocklist(data, addr, addr + PAGE_SIZE))
 				continue;
 
 			if (((data->config & AFL_SNAPSHOT_BLOCK) ||
 			     ((data->config & AFL_SNAPSHOT_NOSTACK) &&
 			      is_stack(pvma))) &&
-			    !intersect_allowlist(addr, addr + PAGE_SIZE))
+			    !intersect_allowlist(data, addr, addr + PAGE_SIZE))
 				continue;
 
 			make_snapshot_page(data, pvma->vm_mm, addr);
