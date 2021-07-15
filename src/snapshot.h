@@ -59,6 +59,7 @@
 #include <linux/mount.h>
 #include <linux/nsproxy.h>
 #include <linux/oom.h>
+#include <linux/pagewalk.h>
 #include <linux/perf_event.h>
 #include <linux/personality.h>
 #include <linux/posix-timers.h>
@@ -225,6 +226,11 @@ extern dup_fd_t dup_fd_ptr;
 typedef void (*put_files_struct_t)(struct files_struct *fs);
 extern put_files_struct_t put_files_struct_ptr;
 #define put_files_struct put_files_struct_ptr
+
+typedef int (*walk_page_vma_t)(struct vm_area_struct *vma,
+			       const struct mm_walk_ops *ops, void *private);
+extern walk_page_vma_t walk_page_vma_ptr;
+#define walk_page_vma walk_page_vma_ptr
 
 int take_memory_snapshot(struct task_data *data);
 int recover_memory_snapshot(struct task_data *data);

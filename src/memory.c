@@ -3,7 +3,9 @@
 #include "linux/gfp.h"
 #include "linux/list.h"
 #include "linux/mm.h"
+#include "linux/mmap_lock.h"
 #include "linux/types.h"
+#include "linux/pagewalk.h"
 #include "task_data.h"
 #include "snapshot.h"
 #include "vdso/limits.h"
@@ -140,30 +142,32 @@ void include_vmrange(unsigned long start, unsigned long end)
 	list_add(&data->allowlist, &n->node);
 }
 
-static int intersect_blocklist(struct task_data *data, unsigned long start,
-			       unsigned long end)
+static struct vmrange *intersect_blocklist(struct task_data *data,
+					   unsigned long start,
+					   unsigned long end)
 {
 	struct vmrange *n = NULL;
 
 	list_for_each_entry (n, &data->blocklist, node) {
 		if (end > n->start && start < n->end)
-			return 1;
+			return n;
 	}
 
-	return 0;
+	return NULL;
 }
 
-static int intersect_allowlist(struct task_data *data, unsigned long start,
-			       unsigned long end)
+static struct vmrange *intersect_allowlist(struct task_data *data,
+					   unsigned long start,
+					   unsigned long end)
 {
 	struct vmrange *n = NULL;
 
 	list_for_each_entry (n, &data->allowlist, node) {
 		if (end > n->start && start < n->end)
-			return 1;
+			return n;
 	}
 
-	return 0;
+	return NULL;
 }
 
 static int add_snapshot_vma(struct task_data *data, unsigned long start,
@@ -229,104 +233,204 @@ static struct snapshot_page *get_snapshot_page(struct task_data *data,
 static struct snapshot_page *add_snapshot_page(struct task_data *data,
 					       unsigned long page_base)
 {
-  struct snapshot_page *sp;
+	struct snapshot_page *sp;
 
-  sp = get_snapshot_page(data, page_base);
-  if (sp == NULL) {
+	sp = get_snapshot_page(data, page_base);
+	if (sp == NULL) {
+		sp = kmalloc(sizeof(struct snapshot_page), GFP_ATOMIC);
+		if (!sp) {
+			FATAL("could not allocate snapshot_page");
+			return NULL;
+		}
 
-    sp = kmalloc(sizeof(struct snapshot_page), GFP_KERNEL);
-    if (!sp) {
-	    FATAL("could not allocate snapshot_page");
-	    return NULL;
-    }
+		sp->page_base = page_base;
+		sp->page_data = NULL;
+		hash_add(data->ss.ss_pages, &sp->next, sp->page_base);
+		INIT_LIST_HEAD(&sp->dirty_list);
+	}
 
-    sp->page_base = page_base;
-    sp->page_data = NULL;
-    hash_add(data->ss.ss_pages, &sp->next, sp->page_base);
-    INIT_LIST_HEAD(&sp->dirty_list);
+	sp->page_prot = 0;
+	sp->has_been_copied = false;
+	sp->dirty = false;
+	sp->in_dirty_list = false;
 
-  }
-
-  sp->page_prot = 0;
-  sp->has_been_copied = false;
-  sp->dirty = false;
-  sp->in_dirty_list = false;
-
-  return sp;
-
+	return sp;
 }
 
-static void make_snapshot_page(struct task_data *data, struct mm_struct *mm,
-			       unsigned long addr)
+static int make_snapshot_page(struct task_data *data, struct mm_struct *mm,
+			      unsigned long addr, pte_t *pte)
 {
-  pte_t *               pte;
-  struct snapshot_page *sp;
-  struct page *         page;
+	struct snapshot_page *sp;
+	struct page *page;
 
-  pte = walk_page_table(addr);
-  if (!pte) goto out;
+	page = pte_page(*pte);
+	DBG_PRINT(
+		"making snapshot: 0x%08lx PTE: 0x%08lx Page: 0x%08lx PageAnon: %d\n",
+		addr, pte->pte, (unsigned long)page, page ? PageAnon(page) : 0);
 
-  page = pte_page(*pte);
+	sp = add_snapshot_page(data, addr);
+	if (!sp)
+		return -ENOMEM;
 
-  DBG_PRINT(
-      "making snapshot: 0x%08lx PTE: 0x%08lx Page: 0x%08lx "
-      "PageAnon: %d\n",
-      addr, pte->pte, (unsigned long)page, page ? PageAnon(page) : 0);
+	if (pte_none(*pte)) {
+		/* empty pte */
+		sp->has_had_pte = false;
+		set_snapshot_page_none_pte(sp);
 
-  sp = add_snapshot_page(data, addr);
+	} else {
+		sp->has_had_pte = true;
+		if (pte_write(*pte)) {
+			/* Private rw page */
+			DBG_PRINT("private writable addr: 0x%08lx\n", addr);
+			ptep_set_wrprotect(mm, addr, pte);
+			set_snapshot_page_private(sp);
 
-  if (pte_none(*pte)) {
+			/* flush tlb to make the pte change effective */
+			k_flush_tlb_mm_range(mm, addr & PAGE_MASK,
+					     (addr & PAGE_MASK) + PAGE_SIZE,
+					     PAGE_SHIFT, false);
+			DBG_PRINT("writable now: %d\n", pte_write(*pte));
 
-    /* empty pte */
-    sp->has_had_pte = false;
-    set_snapshot_page_none_pte(sp);
+		} else {
+			/* COW ro page */
+			DBG_PRINT("cow writable addr: 0x%08lx\n", addr);
+			set_snapshot_page_cow(sp);
+		}
+	}
 
-  } else {
-
-    sp->has_had_pte = true;
-    if (pte_write(*pte)) {
-
-      /* Private rw page */
-      DBG_PRINT("private writable addr: 0x%08lx\n", addr);
-      ptep_set_wrprotect(mm, addr, pte);
-      set_snapshot_page_private(sp);
-
-      /* flush tlb to make the pte change effective */
-      k_flush_tlb_mm_range(mm, addr & PAGE_MASK, (addr & PAGE_MASK) + PAGE_SIZE,
-                           PAGE_SHIFT, false);
-      DBG_PRINT("writable now: %d\n", pte_write(*pte));
-
-    } else {
-
-      /* COW ro page */
-      DBG_PRINT("cow writable addr: 0x%08lx\n", addr);
-      set_snapshot_page_cow(sp);
-
-    }
-
-  }
-
-  pte_unmap(pte);
-
-out:
-  return;
-
+	return 0;
 }
+
+struct snapshot_walk_data {
+	struct task_data *task_data;
+	unsigned long next_allowed_address;
+	unsigned long next_blocked_address;
+};
+
+static int snapshot_walk_check_range(unsigned long addr, unsigned long next,
+				     struct mm_walk *walk)
+{
+	struct snapshot_walk_data *walk_data =
+		(struct snapshot_walk_data *)walk->private;
+	int config = walk_data->task_data->config;
+	struct vmrange *blocked_overlapped_range = NULL;
+	struct vmrange *allowed_overlapped_range = NULL;
+
+	// Fast path for blocked addresses
+	if (next < walk_data->next_blocked_address)
+		return ACTION_CONTINUE;
+
+	// Fast path for allowed addresses
+	if (next < walk_data->next_allowed_address)
+		return ACTION_SUBTREE;
+
+	blocked_overlapped_range =
+		intersect_blocklist(walk_data->task_data, addr, next);
+	if (blocked_overlapped_range) {
+		// Range is entirely blocked
+		if (blocked_overlapped_range->start <= addr &&
+		    blocked_overlapped_range->end >= next) {
+			walk_data->next_blocked_address =
+				blocked_overlapped_range->end;
+			return ACTION_CONTINUE;
+		}
+	}
+
+	allowed_overlapped_range =
+		intersect_allowlist(walk_data->task_data, addr, next);
+	if (allowed_overlapped_range) {
+		// Range is entirely allowed
+		if (allowed_overlapped_range->start <= addr &&
+		    allowed_overlapped_range->end >= next) {
+			walk_data->next_allowed_address =
+				allowed_overlapped_range->end;
+		}
+
+		// If the allowlist is intersected, even partially, we need to
+		// explore the subtree.
+		return ACTION_SUBTREE;
+	}
+
+	// Skip all non whitelisted mappings if BLOCK is specified.
+	if (config & AFL_SNAPSHOT_BLOCK) {
+		// The whole interval does not intersect the allowlist.
+		walk_data->next_blocked_address = next;
+		return ACTION_CONTINUE;
+	}
+
+	// The whole interval does not intersect the blocklist.
+	if (!blocked_overlapped_range)
+		walk_data->next_allowed_address = next;
+
+	return ACTION_SUBTREE;
+}
+
+static int snapshot_pgd_entry(pgd_t *pgd, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	// Still called because it updates `next_*_address`.
+	snapshot_walk_check_range(addr, next, walk);
+	return 0;
+}
+
+static int snapshot_p4d_entry(p4d_t *p4d, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	// Still called because it updates `next_*_address`.
+	snapshot_walk_check_range(addr, next, walk);
+	return 0;
+}
+
+static int snapshot_pud_entry(pud_t *pud, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	walk->action = snapshot_walk_check_range(addr, next, walk);
+	return 0;
+}
+
+static int snapshot_pmd_entry(pmd_t *pmd, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	walk->action = snapshot_walk_check_range(addr, next, walk);
+	return 0;
+}
+
+static int snapshot_pte_entry(pte_t *pte, unsigned long addr,
+			      unsigned long next, struct mm_walk *walk)
+{
+	struct snapshot_walk_data *walk_data =
+		(struct snapshot_walk_data *)walk->private;
+
+	if (snapshot_walk_check_range(addr, next, walk) == ACTION_CONTINUE)
+		return 0;
+
+	return make_snapshot_page(walk_data->task_data, walk->mm, addr, pte);
+}
+
+static const struct mm_walk_ops snapshot_walk_ops = {
+	.pgd_entry = snapshot_pgd_entry,
+	.p4d_entry = snapshot_p4d_entry,
+	.pud_entry = snapshot_pud_entry,
+	.pmd_entry = snapshot_pmd_entry,
+	.pte_entry = snapshot_pte_entry,
+};
 
 // TODO: This seems broken?
 // If I have a page that is right below the page of the stack, then it will count as a stack page.
-inline bool is_stack(struct vm_area_struct *vma) {
-
-  return vma->vm_start <= vma->vm_mm->start_stack &&
-         vma->vm_end >= vma->vm_mm->start_stack;
-
+inline bool is_stack(struct vm_area_struct *vma)
+{
+	return vma->vm_start <= vma->vm_mm->start_stack &&
+	       vma->vm_end >= vma->vm_mm->start_stack;
 }
 
 int take_memory_snapshot(struct task_data *data)
 {
 	struct vm_area_struct *pvma = NULL;
-	unsigned long addr = 0;
 	int res = 0;
+
+	struct snapshot_walk_data walk_data = {
+		.task_data = data,
+	};
 
 #ifdef DEBUG
 	struct vmrange *n = NULL;
@@ -340,44 +444,46 @@ int take_memory_snapshot(struct task_data *data)
 
 	invalidate_task_data_cache(data->tsk);
 
+	mmap_read_lock(current->mm);
 	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
 		// Temporarily store all the vmas
 		if (data->config & AFL_SNAPSHOT_MMAP) {
 			res = add_snapshot_vma(data, pvma->vm_start,
 					       pvma->vm_end);
 			if (res)
-				return res;
+				goto unlock;
 		}
 
-		// We only care about writable pages. Shared memory pages are
-		// skipped. If NOSTACK is specified, skip if this is the stack.
-		// Otherwise look into the allowlist.
-		if (!(((pvma->vm_flags & VM_WRITE) &&
-		       !(pvma->vm_flags & VM_SHARED) &&
-		       !((data->config & AFL_SNAPSHOT_NOSTACK) &&
-			 is_stack(pvma))) ||
-		      intersect_allowlist(data, pvma->vm_start, pvma->vm_end)))
-			continue;
+		if (!intersect_allowlist(data, pvma->vm_start, pvma->vm_end)) {
+			// By default, only writable pages are snapshotted.
+			if (!(pvma->vm_flags & VM_WRITE))
+				continue;
+
+			// By default, shared memory pages are skipped.
+			if (pvma->vm_flags & VM_SHARED)
+				continue;
+
+			// Skip all non whitelisted mappings if BLOCK is specified.
+			if (data->config & AFL_SNAPSHOT_BLOCK)
+				continue;
+
+			// Skip the stack if NOSTACK is specified.
+			if ((data->config & AFL_SNAPSHOT_NOSTACK) &&
+			    is_stack(pvma))
+				continue;
+		}
 
 		DBG_PRINT("Make snapshot start: 0x%08lx end: 0x%08lx\n",
 			  pvma->vm_start, pvma->vm_end);
-
-		for (addr = pvma->vm_start; addr < pvma->vm_end;
-		     addr += PAGE_SIZE) {
-			if (intersect_blocklist(data, addr, addr + PAGE_SIZE))
-				continue;
-
-			if (((data->config & AFL_SNAPSHOT_BLOCK) ||
-			     ((data->config & AFL_SNAPSHOT_NOSTACK) &&
-			      is_stack(pvma))) &&
-			    !intersect_allowlist(data, addr, addr + PAGE_SIZE))
-				continue;
-
-			make_snapshot_page(data, pvma->vm_mm, addr);
-		}
+		res = walk_page_vma(pvma, &snapshot_walk_ops, &walk_data);
+		if (res)
+			goto unlock;
 	}
 
-	return 0;
+unlock:
+	mmap_read_unlock(current->mm);
+
+	return res;
 }
 
 static int munmap_new_vmas(struct task_data *data)

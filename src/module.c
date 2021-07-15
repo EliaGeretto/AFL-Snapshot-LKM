@@ -37,6 +37,7 @@ void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
 			 unsigned long size);
 dup_fd_t dup_fd_ptr;
 put_files_struct_t put_files_struct_ptr;
+walk_page_vma_t walk_page_vma_ptr;
 
 static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
 			  unsigned long arg)
@@ -175,9 +176,11 @@ static int resolve_non_exported_symbols(void)
 	dup_fd_ptr = (dup_fd_t)kallsyms_lookup_name("dup_fd");
 	put_files_struct_ptr =
 		(put_files_struct_t)kallsyms_lookup_name("put_files_struct");
+	walk_page_vma_ptr =
+		(walk_page_vma_t)kallsyms_lookup_name("walk_page_vma");
 
 	if (!k_flush_tlb_mm_range || !k_zap_page_range || !dup_fd_ptr ||
-	    !put_files_struct_ptr) {
+	    !put_files_struct_ptr || !walk_page_vma_ptr) {
 		return -ENOENT;
 	}
 
