@@ -1,64 +1,77 @@
-#define _GNU_SOURCE
-#include <fcntl.h>
-#include <malloc.h>
-#include <setjmp.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/types.h>
 #include <unistd.h>
+#include <stdbool.h>
 
+#include "afl_snapshot.h"
 #include "libaflsnapshot.h"
 
-// gcc -I ../include -g test2.c ../lib/libaflsnapshot.o -o test2
+bool test(uint8_t *shm_addr, uint8_t *none_addr, size_t page_size) {
+  *shm_addr = 0;
+  *none_addr = 0;
 
-int* shm_addr;
-int* none_addr;
+  fprintf(stderr, "shm_addr: %p, none_addr: %p\n", shm_addr, none_addr);
 
-int pippo = 1;
+  if (afl_snapshot_take(AFL_SNAPSHOT_NOSTACK) == 1) { puts("Snapshot taken"); }
 
-void test2() {
+  for (size_t idx = 0; idx < 10; idx++) {
+    *none_addr += 1;
+    *(none_addr + page_size) += 1;
+    *shm_addr += 1;
+    *(shm_addr + page_size) += 1;
 
-  if (afl_snapshot_take(AFL_SNAPSHOT_NOSTACK) == 1)
-    fprintf(stderr, "first time!\n");
+    fprintf(stderr, "shm_addr[0]: %d, none_addr[0]: %d\n", *shm_addr,
+            *none_addr);
+    fprintf(stderr, "shm_addr[1]: %d, none_addr[1]: %d\n",
+            *(shm_addr + page_size), *(none_addr + page_size));
 
-loop:
+    puts("Restoring snapshot");
+    afl_snapshot_restore();
+  }
 
-  *none_addr += 1;
-  *shm_addr += 1;
-  fprintf(stderr, ">> %d     %p = %d    %p = %d\n", pippo, none_addr, *none_addr, shm_addr, *shm_addr);
-  ++pippo;
+  if (*shm_addr != 0) { return false; }
 
-  afl_snapshot_restore();
-  goto loop;
+  if (*(shm_addr + page_size) != 10) { return false; }
 
+  if (*none_addr != 10) { return false; }
+
+  if (*(none_addr + page_size) != 0) { return false; }
+
+  return true;
 }
 
 int main() {
-
-  if (afl_snapshot_init() == -1) {
-    perror("Initialization failed");
+  long page_size = sysconf(_SC_PAGESIZE);
+  if (page_size == -1) {
+    perror("Could not retrieve page size");
     exit(1);
   }
-  
-  shm_addr = mmap(0, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC,
-             MAP_SHARED | MAP_ANONYMOUS, 0, 0);
 
-  none_addr = mmap((void *)0, 0x1000, PROT_READ | PROT_WRITE,
-              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (afl_snapshot_init() == -1) {
+    perror("AFL snapshot initialization failed");
+    exit(1);
+  }
 
-  afl_snapshot_exclude_vmrange((unsigned long)none_addr, (unsigned long)(none_addr + (0x1000/4)));
-  afl_snapshot_include_vmrange((unsigned long)shm_addr, (unsigned long)(shm_addr + (0x10000/4)));
+  uint8_t *shm_addr = mmap(NULL, page_size * 2, PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (shm_addr == MAP_FAILED) {
+    perror("Could not map shared memory");
+    exit(1);
+  }
 
-  *shm_addr = 0;
+  uint8_t *none_addr = mmap(NULL, page_size * 2, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (none_addr == MAP_FAILED) {
+    perror("Could not map private memory");
+    exit(1);
+  }
 
-  test2();
+  afl_snapshot_exclude_vmrange(none_addr, none_addr + page_size);
+  afl_snapshot_include_vmrange(shm_addr, shm_addr + page_size);
+
+  if (!test(shm_addr, none_addr, page_size)) { exit(1); }
 
   return 0;
-
 }
-
-
