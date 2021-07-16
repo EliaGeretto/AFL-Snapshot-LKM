@@ -14,13 +14,13 @@ static void task_data_free_callback(struct rcu_head *rcu)
 	DBG_PRINT("dropping task_data: %p\n", data);
 
 	list_for_each_entry_safe(range, next, &data->blocklist, node) {
-		kfree(range);
 		list_del(&range->node);
+		kfree(range);
 	}
 
 	list_for_each_entry_safe(range, next, &data->allowlist, node) {
-		kfree(range);
 		list_del(&range->node);
+		kfree(range);
 	}
 
 	kfree(data);
