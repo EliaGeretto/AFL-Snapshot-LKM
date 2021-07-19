@@ -109,7 +109,8 @@ struct snapshot_vma {
 	unsigned long vm_start;
 	unsigned long vm_end;
 
-	struct list_head ss_vma_list;
+	struct list_head all_vmas_node;
+	struct list_head snapshotted_vmas_node;
 };
 
 struct snapshot_thread {
@@ -187,7 +188,8 @@ struct snapshot {
   unsigned int  status;
   unsigned long oldbrk;
 
-  struct list_head ss_vma_list;
+  struct list_head all_vmas;
+  struct list_head snapshotted_vmas;
 
   struct pt_regs regs;
 

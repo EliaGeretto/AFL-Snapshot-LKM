@@ -159,8 +159,8 @@ static struct vmrange *intersect_allowlist(struct task_data *data,
 	return NULL;
 }
 
-static int add_snapshot_vma(struct task_data *data, unsigned long start,
-			    unsigned long end)
+static struct snapshot_vma *
+add_snapshot_vma(struct task_data *data, unsigned long start, unsigned long end)
 {
 	struct snapshot_vma *ss_vma;
 
@@ -170,16 +170,17 @@ static int add_snapshot_vma(struct task_data *data, unsigned long start,
 	ss_vma = kmalloc(sizeof(struct snapshot_vma), GFP_KERNEL);
 	if (!ss_vma) {
 		FATAL("snapshot_vma allocation failed!");
-		return -ENOMEM;
+		return NULL;
 	}
 
 	ss_vma->vm_start = start;
 	ss_vma->vm_end = end;
-	INIT_LIST_HEAD(&ss_vma->ss_vma_list);
+	INIT_LIST_HEAD(&ss_vma->all_vmas_node);
+	INIT_LIST_HEAD(&ss_vma->snapshotted_vmas_node);
 
-	list_add_tail(&ss_vma->ss_vma_list, &data->ss.ss_vma_list);
+	list_add_tail(&ss_vma->all_vmas_node, &data->ss.all_vmas);
 
-	return 0;
+	return ss_vma;
 }
 
 #ifdef DEBUG
@@ -204,6 +205,26 @@ void dump_memory_snapshot(struct task_data *data)
 }
 #endif
 
+static bool is_snapshotted_address(struct task_data *data,
+				   unsigned long page_base)
+{
+	struct snapshot_vma *ss_vma;
+
+	list_for_each_entry (ss_vma, &data->ss.snapshotted_vmas,
+			     snapshotted_vmas_node) {
+		if (ss_vma->vm_start <= page_base &&
+		    page_base < ss_vma->vm_end) {
+			return true;
+		}
+
+		if (ss_vma->vm_start > page_base) {
+			break;
+		}
+	}
+
+	return false;
+}
+
 static struct snapshot_page *get_snapshot_page(struct task_data *data,
 					       unsigned long page_base)
 {
@@ -218,11 +239,13 @@ static struct snapshot_page *get_snapshot_page(struct task_data *data,
 }
 
 static struct snapshot_page *add_snapshot_page(struct task_data *data,
-					       unsigned long page_base)
+					       unsigned long page_base,
+					       bool attempt_reuse)
 {
-	struct snapshot_page *sp;
+	struct snapshot_page *sp = NULL;
 
-	sp = get_snapshot_page(data, page_base);
+	if (attempt_reuse)
+		sp = get_snapshot_page(data, page_base);
 	if (sp == NULL) {
 		sp = kmalloc(sizeof(struct snapshot_page), GFP_ATOMIC);
 		if (!sp) {
@@ -255,7 +278,7 @@ static int make_snapshot_page(struct task_data *data, struct mm_struct *mm,
 		"making snapshot: 0x%08lx PTE: 0x%08lx Page: 0x%08lx PageAnon: %d\n",
 		addr, pte->pte, (unsigned long)page, page ? PageAnon(page) : 0);
 
-	sp = add_snapshot_page(data, addr);
+	sp = add_snapshot_page(data, addr, true);
 	if (!sp)
 		return -ENOMEM;
 
@@ -413,6 +436,7 @@ inline bool is_stack(struct vm_area_struct *vma)
 int take_memory_snapshot(struct task_data *data)
 {
 	struct vm_area_struct *pvma = NULL;
+	struct snapshot_vma *ss_vma = NULL;
 	int res = 0;
 
 	struct snapshot_walk_data walk_data = {
@@ -433,12 +457,10 @@ int take_memory_snapshot(struct task_data *data)
 
 	mmap_read_lock(current->mm);
 	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
-		// Temporarily store all the vmas
-		if (data->config & AFL_SNAPSHOT_MMAP) {
-			res = add_snapshot_vma(data, pvma->vm_start,
-					       pvma->vm_end);
-			if (res)
-				goto unlock;
+		ss_vma = add_snapshot_vma(data, pvma->vm_start, pvma->vm_end);
+		if (!ss_vma) {
+			res = -ENOMEM;
+			goto unlock;
 		}
 
 		if (!intersect_allowlist(data, pvma->vm_start, pvma->vm_end)) {
@@ -462,6 +484,8 @@ int take_memory_snapshot(struct task_data *data)
 
 		DBG_PRINT("Make snapshot start: 0x%08lx end: 0x%08lx\n",
 			  pvma->vm_start, pvma->vm_end);
+		list_add_tail(&ss_vma->snapshotted_vmas_node,
+			      &data->ss.snapshotted_vmas);
 		res = walk_page_vma(pvma, &snapshot_walk_ops, &walk_data);
 		if (res)
 			goto unlock;
@@ -478,7 +502,7 @@ static int munmap_new_vmas(struct task_data *data)
 	struct vm_area_struct *vma_iter = data->tsk->mm->mmap;
 	struct vm_area_struct *next_vma_iter = NULL;
 	struct snapshot_vma *ss_vma_iter = list_first_entry(
-		&data->ss.ss_vma_list, struct snapshot_vma, ss_vma_list);
+		&data->ss.all_vmas, struct snapshot_vma, all_vmas_node);
 
 	unsigned long cursor = 0;
 	unsigned long next_cursor = 0;
@@ -493,9 +517,8 @@ static int munmap_new_vmas(struct task_data *data)
 
 	DBG_PRINT("unmapping new vmas:\n");
 
-	while (vma_iter ||
-	       !list_entry_is_head(ss_vma_iter, &data->ss.ss_vma_list,
-				   ss_vma_list)) {
+	while (vma_iter || !list_entry_is_head(ss_vma_iter, &data->ss.all_vmas,
+					       all_vmas_node)) {
 		// Calculate next valid positions for vma lists.
 		if (vma_iter) {
 			// `vm_munmap` may free the `vm_area_struct`, so save `vm_next` here.
@@ -507,8 +530,8 @@ static int munmap_new_vmas(struct task_data *data)
 			next_vma_pos = ULONG_MAX;
 		}
 
-		if (!list_entry_is_head(ss_vma_iter, &data->ss.ss_vma_list,
-					ss_vma_list)) {
+		if (!list_entry_is_head(ss_vma_iter, &data->ss.all_vmas,
+					all_vmas_node)) {
 			next_ss_vma_pos = in_ss_vmas ? ss_vma_iter->vm_end :
 							     ss_vma_iter->vm_start;
 		} else {
@@ -543,7 +566,7 @@ static int munmap_new_vmas(struct task_data *data)
 			in_ss_vmas = !in_ss_vmas;
 			if (!in_ss_vmas)
 				ss_vma_iter = list_next_entry(ss_vma_iter,
-							      ss_vma_list);
+							      all_vmas_node);
 		}
 
 		cursor = next_cursor;
@@ -646,11 +669,12 @@ static void clean_snapshot_vmas(struct task_data *data)
 
 	DBG_PRINT("freeing snapshot vmas:\n");
 
-	list_for_each_entry_safe (ss_vma, next, &data->ss.ss_vma_list,
-				  ss_vma_list) {
+	list_for_each_entry_safe (ss_vma, next, &data->ss.all_vmas,
+				  all_vmas_node) {
 		DBG_PRINT("  start: 0x%08lx end: 0x%08lx\n", ss_vma->vm_start,
 			  ss_vma->vm_end);
-		list_del(&ss_vma->ss_vma_list);
+		list_del(&ss_vma->all_vmas_node);
+		list_del(&ss_vma->snapshotted_vmas_node);
 		kfree(ss_vma);
 	}
 }
@@ -663,8 +687,7 @@ void clean_memory_snapshot(struct task_data *data)
 
 	invalidate_task_data_cache(data->tsk);
 
-	if (data->config & AFL_SNAPSHOT_MMAP)
-		clean_snapshot_vmas(data);
+	clean_snapshot_vmas(data);
 
 	hash_for_each_safe (data->ss.ss_pages, i, tmp, sp, next) {
 		kfree(sp->page_data);
@@ -704,13 +727,13 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 
 	page_base_addr = vmf->address & PAGE_MASK;
 
-	DBG_PRINT("searching snapshot_page for 0x%016lx in task_data: %p\n",
-		  page_base_addr, data);
-	ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
+	DBG_PRINT("%s: searching snapshot_page for 0x%016lx in task_data: %p\n",
+		  __func__, page_base_addr, data);
+	ss_page = get_snapshot_page(data, page_base_addr);
 	if (!ss_page)
 		return;
 
-	if (ss_page->dirty)
+	if (ss_page->dirty || is_snapshot_page_none_pte(ss_page))
 		return;
 	ss_page->dirty = true;
 
@@ -798,12 +821,19 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 	if (!data || !have_snapshot(data))
 		return;
 
-	DBG_PRINT("searching snapshot_page for 0x%016lx in task_data: %p\n",
-		  page_base_addr, data);
+	DBG_PRINT("%s: searching snapshot_page for 0x%016lx in task_data: %p\n",
+		  __func__, page_base_addr, data);
 	ss_page = get_snapshot_page(data, page_base_addr);
-	if (!ss_page)
-		/* not a snapshot'ed page */
-		return;
+	if (!ss_page) {
+		if (!is_snapshotted_address(data, page_base_addr))
+			return;
+
+		// Allocate entries for pages that did not have a PTE on demand.
+		DBG_PRINT("adding page without PTE to snapshot: 0x%08lx\n",
+			  page_base_addr);
+		ss_page = add_snapshot_page(data, page_base_addr, false);
+		set_snapshot_page_none_pte(ss_page);
+	}
 
 	DBG_PRINT("do_anonymous_page 0x%08lx\n", address);
 	// dump_stack();

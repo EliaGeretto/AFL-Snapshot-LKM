@@ -58,7 +58,9 @@ struct task_data *ensure_task_data(const struct task_struct *tsk)
 
 	data->tsk = tsk;
 
-	INIT_LIST_HEAD(&data->ss.ss_vma_list);
+	INIT_LIST_HEAD(&data->ss.all_vmas);
+	INIT_LIST_HEAD(&data->ss.snapshotted_vmas);
+
 	hash_init(data->ss.ss_pages);
 	INIT_LIST_HEAD(&data->ss.dirty_pages);
 
