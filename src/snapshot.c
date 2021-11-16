@@ -97,11 +97,17 @@ static void restore_snapshot(struct task_data *data) {
 
 }
 
-void recover_snapshot(void) {
+int recover_snapshot(void)
+{
+	struct task_data *data = get_task_data(current);
+	if (!data) {
+		pr_err("no snapshot found to restore");
+		return 1;
+	}
 
-  struct task_data *data = get_task_data(current);
-  restore_snapshot(data);
+	restore_snapshot(data);
 
+	return 0;
 }
 
 int exit_snapshot(void)

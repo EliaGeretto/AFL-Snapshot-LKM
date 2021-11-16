@@ -258,7 +258,7 @@ extern do_exit_t do_exit_orig;
 void do_exit_hook(long code);
 
 int  take_snapshot(int config);
-void recover_snapshot(void);
+int recover_snapshot(void);
 void clean_snapshot(void);
 int  exit_snapshot(void);
 

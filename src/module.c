@@ -93,8 +93,7 @@ static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
 
       DBG_PRINT("Calling afl_snapshot_restore");
 
-      recover_snapshot();
-      return 0;
+      return recover_snapshot();
 
     }
 
