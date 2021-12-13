@@ -45,5 +45,7 @@ int main(void) {
     afl_snapshot_restore();
   }
 
+  printf("The second chunk should be \" is \" both times.\n");
+
   return 0;
 }
