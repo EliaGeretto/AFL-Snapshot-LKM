@@ -66,20 +66,19 @@ int take_snapshot(int config) {
 
 }
 
-static void recover_state(struct task_data *data) {
+static void recover_state(struct task_data *data)
+{
+	if (data->config & AFL_SNAPSHOT_REGS) {
+		struct pt_regs *regs = task_pt_regs(current);
 
-  if (data->config & AFL_SNAPSHOT_REGS) {
+		// restore regs context
+		*regs = data->ss.regs;
+	}
 
-    struct pt_regs *regs = task_pt_regs(current);
-
-    // restore regs context
-    *regs = data->ss.regs;
-
-  }
-
-  // restore brk
-  if (current->mm->brk > data->ss.oldbrk) current->mm->brk = data->ss.oldbrk;
-
+	// restore brk
+	if (restore_brk(data->ss.oldbrk)) {
+		pr_err("could not restore program break");
+	}
 }
 
 static void restore_snapshot(struct task_data *data) {
@@ -89,12 +88,11 @@ static void restore_snapshot(struct task_data *data) {
 #endif
 
   recover_threads_snapshot(data);
+  recover_state(data);
   recover_memory_snapshot(data);
   if (recover_files_snapshot(data)) {
     pr_err("error while snapshotting files");
   }
-  recover_state(data);
-
 }
 
 int recover_snapshot(void)

@@ -236,6 +236,7 @@ extern walk_page_vma_t walk_page_vma_ptr;
 
 int take_memory_snapshot(struct task_data *data);
 int recover_memory_snapshot(struct task_data *data);
+int restore_brk(unsigned long old_brk);
 void clean_memory_snapshot(struct task_data *data);
 
 #ifdef DEBUG

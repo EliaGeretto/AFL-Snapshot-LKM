@@ -497,6 +497,55 @@ unlock:
 	return res;
 }
 
+// Taken from mm/mmap.c
+// XXX: Locking is broken because vm functions relock mm.
+int restore_brk(unsigned long snapshotted_brk)
+{
+	unsigned long current_brk, aligned_current_brk, aligned_snapshotted_brk;
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *next;
+
+	current_brk = mm->brk;
+
+	// The snapshotted break was a valid break, so no need to check it here.
+
+	aligned_current_brk = PAGE_ALIGN(current_brk);
+	aligned_snapshotted_brk = PAGE_ALIGN(snapshotted_brk);
+	if (aligned_current_brk == aligned_snapshotted_brk) {
+		goto success;
+	}
+
+	if (snapshotted_brk <= current_brk) {
+		int ret;
+
+		ret = vm_munmap(snapshotted_brk, current_brk - snapshotted_brk);
+		if (ret < 0) {
+			FATAL("Failed to unmap new program break");
+			return -1;
+		}
+
+		goto success;
+	}
+
+	mmap_read_lock(mm);
+	next = find_vma(mm, current_brk);
+	if (next && snapshotted_brk + PAGE_SIZE > next->vm_start) {
+		mmap_read_unlock(mm);
+		FATAL("Snapshotted program break overlaps with new VMA");
+		return -1;
+	}
+	mmap_read_unlock(mm);
+
+	if (vm_brk(current_brk, snapshotted_brk - current_brk) < 0) {
+		FATAL("Could not remap snapshotted program break");
+		return -1;
+	}
+
+success:
+	mm->brk = snapshotted_brk;
+	return 0;
+}
+
 static int munmap_new_vmas(struct task_data *data)
 {
 	struct vm_area_struct *vma_iter = data->tsk->mm->mmap;
