@@ -23,6 +23,8 @@ int main(void) {
 
   afl_snapshot_include_vmrange(map_ptr, map_ptr + page_size);
 
+  puts("The value of map_ptr should be restored.");
+
   bool is_restored = false;
   if (afl_snapshot_take(AFL_SNAPSHOT_MMAP | AFL_SNAPSHOT_FDS |
                         AFL_SNAPSHOT_REGS)) {
@@ -52,7 +54,11 @@ int main(void) {
     afl_snapshot_restore();
   }
 
-  if (map_ptr[0] != 1) { return 1; }
+  if (map_ptr[0] != 1) {
+    puts("Failure!");
+    exit(1);
+  }
+  puts("Success!");
 
   return 0;
 }
