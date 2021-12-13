@@ -11,7 +11,8 @@ SRCS = \
        test7.c \
        test8.c \
        test9.c \
-       test10.c
+       test10.c \
+       test11.c
 
 BINS = $(SRCS:.c=)
 
