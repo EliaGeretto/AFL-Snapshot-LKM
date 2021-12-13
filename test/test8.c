@@ -12,6 +12,8 @@ int main(void) {
                       MAP_PRIVATE | MAP_NORESERVE | MAP_ANON, -1, 0);
   printf("Mapped %zu TB of memory\n", MAPPING_SIZE / 1024 / 1024 / 1024 / 1024);
 
+  puts("The value of map_ptr should be restored.");
+
   if (afl_snapshot_init() == -1) {
     perror("Initialization failed");
     exit(1);
@@ -36,7 +38,11 @@ int main(void) {
     afl_snapshot_restore();
   }
 
-  if (map_ptr[0] != 1) { return 1; }
+  if (map_ptr[0] != 1) {
+    puts("Failure!");
+    exit(1);
+  }
+  puts("Success!");
 
   return 0;
 }
