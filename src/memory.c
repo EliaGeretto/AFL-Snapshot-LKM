@@ -745,51 +745,25 @@ void clean_memory_snapshot(struct task_data *data)
 	}
 }
 
-static vm_fault_t do_wp_page_stub(struct vm_fault *vmf)
+struct snapshot_page *record_dirty_page(struct task_data *data,
+					struct mm_struct *mm,
+					unsigned long page_addr, pte_t pte)
 {
-	return 0;
-}
-
-void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
-		     struct ftrace_ops *op, ftrace_regs_ptr regs)
-{
-	struct pt_regs *pregs = ftrace_get_regs(regs);
-	struct vm_fault *vmf = NULL;
-
-	struct task_data *data = NULL;
 	struct snapshot_page *ss_page = NULL;
 
-	struct mm_struct *mm = NULL;
-	struct page *old_page = NULL;
-	pte_t entry;
-	void *vfrom = NULL;
-	unsigned long page_base_addr;
-
-	vmf = (struct vm_fault *)regs_get_kernel_argument(pregs, 0);
-	mm = vmf->vma->vm_mm;
-
-	// XXX: mm->owner is probably the group leader, not necessarily the
-	// thread that triggered the page fault.
-	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
-	if (!data || !have_snapshot(data))
-		return;
-
-	page_base_addr = vmf->address & PAGE_MASK;
-
 	DBG_PRINT("%s: searching snapshot_page for 0x%016lx in task_data: %p\n",
-		  __func__, page_base_addr, data);
-	ss_page = get_snapshot_page(data, page_base_addr);
+		  __func__, page_addr, data);
+	ss_page = get_snapshot_page(data, page_addr);
 	if (!ss_page)
-		return;
+		return NULL;
 
 	if (ss_page->dirty || is_snapshot_page_none_pte(ss_page))
-		return;
+		return NULL;
 	ss_page->dirty = true;
 
-	DBG_PRINT("hooking page fault for 0x%016lx\n", page_base_addr);
-
+	DBG_PRINT("adding page to dirty list: 0x%016lx\n", page_addr);
 	if (ss_page->in_dirty_list) {
-		WARNF("0x%016lx: Adding page to dirty list, but it's already there??? (dirty: %d, copied: %d)\n",
+		WARNF("page (0x%016lx) already in dirty list (dirty: %d, copied: %d)\n",
 		      ss_page->page_base, ss_page->dirty,
 		      ss_page->has_been_copied);
 	} else {
@@ -801,24 +775,57 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 	 * the page becomes COW page again. we do not need to take care of it.
 	 */
 	if (!ss_page->has_been_copied) {
-		DBG_PRINT("copying page 0x%016lx\n", page_base_addr);
+		struct page *original_page = NULL;
+		void *mapped_page_addr = NULL;
+
+		DBG_PRINT("copying page 0x%016lx\n", page_addr);
 
 		/* reserved old page data */
 		if (!ss_page->page_data) {
 			ss_page->page_data = kmalloc(PAGE_SIZE, GFP_ATOMIC);
 			if (!ss_page->page_data) {
 				FATAL("could not allocate memory for page_data");
-				return;
+				return NULL;
 			}
 		}
 
-		old_page = pfn_to_page(pte_pfn(vmf->orig_pte));
-		vfrom = kmap_atomic(old_page);
-		memcpy(ss_page->page_data, vfrom, PAGE_SIZE);
-		kunmap_atomic(vfrom);
+		original_page = pfn_to_page(pte_pfn(pte));
+		mapped_page_addr = kmap_local_page(original_page);
+		memcpy(ss_page->page_data, mapped_page_addr, PAGE_SIZE);
+		kunmap_local(mapped_page_addr);
 
 		ss_page->has_been_copied = true;
 	}
+
+	return ss_page;
+}
+
+static vm_fault_t do_wp_page_stub(struct vm_fault *vmf)
+{
+	return 0;
+}
+
+void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
+		     struct ftrace_ops *op, ftrace_regs_ptr regs)
+{
+	struct pt_regs *pregs = ftrace_get_regs(regs);
+	struct vm_fault *fault =
+		(struct vm_fault *)regs_get_kernel_argument(pregs, 0);
+	struct mm_struct *mm = fault->vma->vm_mm;
+	unsigned long page_base_addr = fault->address & PAGE_MASK;
+
+	struct task_data *data = NULL;
+	struct snapshot_page *ss_page = NULL;
+
+	pte_t entry;
+
+	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
+	if (!data || !have_snapshot(data))
+		return;
+
+	ss_page = record_dirty_page(data, mm, page_base_addr, fault->orig_pte);
+	if (!ss_page)
+		return;
 
 	/* if this was originally a COW page, let the original page fault handler
 	 * handle it.
@@ -828,17 +835,17 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 
 	DBG_PRINT(
 		"handling page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n",
-		current->comm, vmf->address, (unsigned long)vmf->pte,
-		vmf->orig_pte.pte);
+		current->comm, fault->address, (unsigned long)fault->pte,
+		fault->orig_pte.pte);
 
 	/* change the page prot back to ro from rw */
-	entry = pte_mkwrite(vmf->orig_pte);
-	set_pte_at(mm, vmf->address, vmf->pte, entry);
+	entry = pte_mkwrite(fault->orig_pte);
+	set_pte_at(mm, fault->address, fault->pte, entry);
 
 	k_flush_tlb_mm_range(mm, page_base_addr, page_base_addr + PAGE_SIZE,
 			     PAGE_SHIFT, false);
 
-	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	pte_unmap_unlock(fault->pte, fault->ptl);
 
 	// skip original function
 	pregs->ip = (unsigned long)&do_wp_page_stub;
@@ -899,6 +906,44 @@ void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 			list_add_tail(&ss_page->dirty_list,
 				      &data->ss.dirty_pages);
 		}
+	}
+}
+
+static int munmap_pte_entry(pte_t *pte, unsigned long addr, unsigned long next,
+			    struct mm_walk *walk)
+{
+	struct task_data *data = (struct task_data *)walk->private;
+	record_dirty_page(data, walk->mm, addr, *pte);
+	return 0;
+}
+
+static const struct mm_walk_ops munmap_walk_ops = {
+	.pte_entry = munmap_pte_entry,
+};
+
+void __do_munmap_hook(unsigned long ip, unsigned long parent_ip,
+		      struct ftrace_ops *op, ftrace_regs_ptr regs)
+{
+	struct pt_regs *pregs = ftrace_get_regs(regs);
+	struct mm_struct *mm =
+		(struct mm_struct *)regs_get_kernel_argument(pregs, 0);
+	unsigned long start = regs_get_kernel_argument(pregs, 1);
+	size_t len = regs_get_kernel_argument(pregs, 2);
+	unsigned long end = start + len;
+
+	struct task_data *data = NULL;
+
+	data = get_task_data_with_cache(rcu_access_pointer(mm->owner));
+	if (!data || !have_snapshot(data))
+		return;
+
+	DBG_PRINT("%s: saving unmapped memory from 0x%08lx to 0x%08lx",
+		  __func__, start, end);
+
+	// __do_munmap is always called while holding a lock on mm, so no need to lock
+	// to perform the page walk here.
+	if (walk_page_range(mm, start, end, &munmap_walk_ops, data) < 0) {
+		FATAL("could not walk page table for munmap");
 	}
 }
 

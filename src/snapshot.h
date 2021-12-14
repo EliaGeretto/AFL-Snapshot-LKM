@@ -234,6 +234,12 @@ typedef int (*walk_page_vma_t)(struct vm_area_struct *vma,
 extern walk_page_vma_t walk_page_vma_ptr;
 #define walk_page_vma walk_page_vma_ptr
 
+typedef int (*walk_page_range_t)(struct mm_struct *mm, unsigned long start,
+				 unsigned long end,
+				 const struct mm_walk_ops *ops, void *private);
+extern walk_page_range_t walk_page_range_ptr;
+#define walk_page_range walk_page_range_ptr
+
 int take_memory_snapshot(struct task_data *data);
 int recover_memory_snapshot(struct task_data *data);
 int restore_brk(unsigned long old_brk);
@@ -253,6 +259,8 @@ void do_wp_page_hook(unsigned long ip, unsigned long parent_ip,
 		     struct ftrace_ops *op, ftrace_regs_ptr regs);
 void page_add_new_anon_rmap_hook(unsigned long ip, unsigned long parent_ip,
 				 struct ftrace_ops *op, ftrace_regs_ptr regs);
+void __do_munmap_hook(unsigned long ip, unsigned long parent_ip,
+		      struct ftrace_ops *op, ftrace_regs_ptr regs);
 
 typedef void (*do_exit_t)(long code);
 extern do_exit_t do_exit_orig;

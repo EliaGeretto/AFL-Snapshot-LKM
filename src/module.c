@@ -38,6 +38,7 @@ void (*k_zap_page_range)(struct vm_area_struct *vma, unsigned long start,
 dup_fd_t dup_fd_ptr;
 put_files_struct_t put_files_struct_ptr;
 walk_page_vma_t walk_page_vma_ptr;
+walk_page_range_t walk_page_range_ptr;
 
 static long mod_dev_ioctl(struct file *filep, unsigned int cmd,
 			  unsigned long arg)
@@ -177,9 +178,12 @@ static int resolve_non_exported_symbols(void)
 		(put_files_struct_t)kallsyms_lookup_name("put_files_struct");
 	walk_page_vma_ptr =
 		(walk_page_vma_t)kallsyms_lookup_name("walk_page_vma");
+	walk_page_range_ptr =
+		(walk_page_range_t)kallsyms_lookup_name("walk_page_range");
 
 	if (!k_flush_tlb_mm_range || !k_zap_page_range || !dup_fd_ptr ||
-	    !put_files_struct_ptr || !walk_page_vma_ptr) {
+	    !put_files_struct_ptr || !walk_page_vma_ptr ||
+	    !walk_page_range_ptr) {
 		return -ENOENT;
 	}
 
@@ -216,6 +220,12 @@ static int __init mod_init(void)
 	}
 
 	if (try_hook("page_add_new_anon_rmap", &page_add_new_anon_rmap_hook)) {
+		FATAL("Unable to hook page_add_new_anon_rmap");
+		res = -ENOENT;
+		goto err_hooks;
+	}
+
+	if (try_hook("__do_munmap", &__do_munmap_hook)) {
 		FATAL("Unable to hook page_add_new_anon_rmap");
 		res = -ENOENT;
 		goto err_hooks;
