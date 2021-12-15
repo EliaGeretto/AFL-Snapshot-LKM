@@ -109,6 +109,9 @@ struct snapshot_vma {
 	unsigned long vm_start;
 	unsigned long vm_end;
 
+	bool is_anonymous_private;
+	unsigned long prot;
+
 	struct list_head all_vmas_node;
 	struct list_head snapshotted_vmas_node;
 };

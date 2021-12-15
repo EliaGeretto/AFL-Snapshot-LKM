@@ -159,13 +159,13 @@ static struct vmrange *intersect_allowlist(struct task_data *data,
 	return NULL;
 }
 
-static struct snapshot_vma *
-add_snapshot_vma(struct task_data *data, unsigned long start, unsigned long end)
+static struct snapshot_vma *add_snapshot_vma(struct task_data *data,
+					     struct vm_area_struct *vma)
 {
 	struct snapshot_vma *ss_vma;
 
-	DBG_PRINT("adding snapshot_vma, start: 0x%08lx end: 0x%08lx\n", start,
-		  end);
+	DBG_PRINT("adding snapshot_vma, start: 0x%016lx end: 0x%016lx\n",
+		  vma->vm_start, vma->vm_end);
 
 	ss_vma = kmalloc(sizeof(struct snapshot_vma), GFP_KERNEL);
 	if (!ss_vma) {
@@ -173,8 +173,18 @@ add_snapshot_vma(struct task_data *data, unsigned long start, unsigned long end)
 		return NULL;
 	}
 
-	ss_vma->vm_start = start;
-	ss_vma->vm_end = end;
+	ss_vma->vm_start = vma->vm_start;
+	ss_vma->vm_end = vma->vm_end;
+	ss_vma->is_anonymous_private =
+		vma_is_anonymous(vma) & !(vma->vm_flags & VM_SHARED);
+	if (ss_vma->is_anonymous_private) {
+		DBG_PRINT("anonymous private mapping: 0x%016lx", vma->vm_start);
+	}
+
+	ss_vma->prot |= vma->vm_flags | VM_READ ? PROT_READ : 0;
+	ss_vma->prot |= vma->vm_flags | VM_WRITE ? PROT_WRITE : 0;
+	ss_vma->prot |= vma->vm_flags | VM_EXEC ? PROT_EXEC : 0;
+
 	INIT_LIST_HEAD(&ss_vma->all_vmas_node);
 	INIT_LIST_HEAD(&ss_vma->snapshotted_vmas_node);
 
@@ -457,7 +467,7 @@ int take_memory_snapshot(struct task_data *data)
 
 	mmap_read_lock(current->mm);
 	for (pvma = current->mm->mmap; pvma; pvma = pvma->vm_next) {
-		ss_vma = add_snapshot_vma(data, pvma->vm_start, pvma->vm_end);
+		ss_vma = add_snapshot_vma(data, pvma);
 		if (!ss_vma) {
 			res = -ENOMEM;
 			goto unlock;
@@ -546,7 +556,7 @@ success:
 	return 0;
 }
 
-static int munmap_new_vmas(struct task_data *data)
+static int restore_vmas(struct task_data *data)
 {
 	struct vm_area_struct *vma_iter = data->tsk->mm->mmap;
 	struct vm_area_struct *next_vma_iter = NULL;
@@ -592,17 +602,32 @@ static int munmap_new_vmas(struct task_data *data)
 		// `in_vmas` and `in_ss_vmas` hold for the interval [cursor,
 		// next_cursor).
 		if (next_cursor != cursor && in_vmas && !in_ss_vmas) {
-			DBG_PRINT("  unmapping (0x%08lx, 0x%08lx)\n", cursor,
+			DBG_PRINT("  unmapping (0x%016lx, 0x%016lx)\n", cursor,
 				  next_cursor);
 			res = vm_munmap(cursor, next_cursor - cursor);
 			if (res) {
-				FATAL("munmap failed, start: 0x%08lx, end: 0x%08lx\n",
+				FATAL("vm_munmap failed, start: 0x%016lx, end: 0x%016lx\n",
 				      cursor, next_cursor);
 				return res;
 			}
 		} else if (next_cursor != cursor && !in_vmas && in_ss_vmas) {
-			FATAL("missing memory, start: 0x%08lx, end: 0x%08lx\n",
-			      cursor, next_cursor);
+			if (ss_vma_iter->is_anonymous_private) {
+				unsigned long addr;
+
+				// An anonymous private mapping can be easily restored.
+				addr = vm_mmap(
+					NULL, cursor, next_cursor - cursor,
+					ss_vma_iter->prot,
+					MAP_PRIVATE | MAP_FIXED_NOREPLACE, 0);
+				if (IS_ERR((void *)addr) || addr != cursor) {
+					FATAL("vm_mmap failed, start: 0x%016lx, end: 0x%016lx, res: 0x%016lx\n",
+					      cursor, next_cursor, addr);
+					return res;
+				}
+			} else {
+				FATAL("missing memory, start: 0x%016lx, end: 0x%016lx\n",
+				      cursor, next_cursor);
+			}
 		}
 
 		if (next_cursor == next_vma_pos) {
@@ -658,7 +683,7 @@ int recover_memory_snapshot(struct task_data *data)
 	int res = 0;
 
 	if (data->config & AFL_SNAPSHOT_MMAP) {
-		res = munmap_new_vmas(data);
+		res = restore_vmas(data);
 		if (res)
 			return res;
 	}
